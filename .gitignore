@@ -13,3 +13,6 @@ venv/
 # Generated files
 logs/
 data/
+
+# IDE settings
+.vscode/

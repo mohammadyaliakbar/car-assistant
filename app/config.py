@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     LOG_TO_FILE: bool = True
     LOG_FILE: str = "logs/app.log"
 
+    OBD_PORT: str
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
