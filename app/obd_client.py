@@ -1,9 +1,8 @@
 import obd
 
 
-
 class OBDClient:
-    def __init__(self, port:str):
+    def __init__(self, port: str):
         self.connection = obd.OBD(
             portstr=port,
             baudrate=38400,
@@ -15,7 +14,7 @@ class OBDClient:
             self.connection.close()
             raise ConnectionError("Could not connect to the vehicle.")
 
-    def read_vihecle_data(self) -> dict:
+    def read_vehicle_data(self) -> dict:
         commands = {
             "rpm": obd.commands.RPM,
             "speed": obd.commands.SPEED,
@@ -30,9 +29,10 @@ class OBDClient:
             if response.is_null():
                 data[name] = None
             else:
-                data[name] = response.value.magnitude
-                            
+                data[name] = float(response.value.magnitude)
+
         return data
 
     def close(self):
         self.connection.close()
+
