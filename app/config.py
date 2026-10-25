@@ -14,6 +14,8 @@ class Settings(BaseSettings):
 
     OBD_PORT: str = Field(min_length=1)
 
+    VEHICLE_ID: str 
+
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",
         env_file_encoding="utf-8",
