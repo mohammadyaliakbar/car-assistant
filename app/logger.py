@@ -7,6 +7,20 @@ from app.config import settings
 
 _CONFIGURED = False
 
+class ColorFormatter(logging.Formatter):
+    """رنگ‌دهی کل خط لاگ بر اساس سطح (فقط برای کنسول)."""
+
+    RESET = "\033[0m"
+    COLORS = {
+        logging.WARNING: "\033[33m",     # زرد
+        logging.ERROR: "\033[1;31m",     # قرمز پررنگ
+        logging.CRITICAL: "\033[1;31m",  # قرمز پررنگ
+    }
+
+    def format(self, record: logging.LogRecord) -> str:
+        message = super().format(record)
+        color = self.COLORS.get(record.levelno)
+        return f"{color}{message}{self.RESET}" if color else message
 
 def setup_logging() -> None:
     global _CONFIGURED
@@ -34,7 +48,9 @@ def setup_logging() -> None:
     root_logger.setLevel(log_level)
 
     console_handler = logging.StreamHandler()
-    console_handler.setFormatter(formatter)
+    console_handler.setFormatter(
+        ColorFormatter(fmt=log_format, datefmt=date_format)
+    )
     root_logger.addHandler(console_handler)
 
     if settings.LOG_TO_FILE:

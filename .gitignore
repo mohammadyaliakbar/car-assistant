@@ -9,6 +9,7 @@ venv/
 
 # Logs
 *.log
+*.log.*
 
 # Generated files
 logs/
