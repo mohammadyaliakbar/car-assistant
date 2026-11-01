@@ -3,6 +3,7 @@ import time
 from pathlib import Path
 import logging
 
+from app.notifications.telegram_notifier import TelegramNotifier
 from app.config import settings
 from app.data_models import VehicleRecord
 from app.data_validation import DataValidator
@@ -73,6 +74,7 @@ def run_cycle(
     detector_engine,
     profile,
     source_name: str,
+    telegram_notifier=None
 ) -> bool:
     """اجرای یک چرخه دریافت، اعتبارسنجی و تشخیص اطلاعات خودرو."""
 
@@ -139,6 +141,9 @@ def run_cycle(
             event.event_type,
         )
 
+        if telegram_notifier is not None:
+            telegram_notifier.notify_event(event)
+
     if events:
         save_events(events)
 
@@ -159,6 +164,30 @@ def main():
         # 3. ساخت DetectorEngine
         # فقط یک بار ساخته می‌شود تا وضعیت Detectorها حفظ شود.
         detector_engine = build_detector_engine()
+
+                # ساخت Telegram Notifier
+        telegram_token = getattr(
+            settings, "TELEGRAM_BOT_TOKEN", ""
+        )
+        telegram_chat_id = getattr(
+            settings, "TELEGRAM_CHAT_ID", ""
+        )
+
+        telegram_notifier = None
+
+        if telegram_token and telegram_chat_id:
+            telegram_notifier = TelegramNotifier(
+                token=telegram_token,
+                chat_id=telegram_chat_id,
+                cooldown_seconds=300,
+            )
+            logger.info("Telegram notifications enabled.")
+
+        else:
+            logger.warning(
+                "Telegram notifications disabled: "
+                "missing bot token or chat ID."
+            )
 
         # 4. اتصال به OBD با استفاده از تنظیمات پروژه
         client = OBDClient(settings.OBD_PORT)
@@ -184,6 +213,7 @@ def main():
                     detector_engine,
                     profile,
                     SOURCE_NAME,
+                    telegram_notifier,
                 )
 
             except Exception:

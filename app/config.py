@@ -16,6 +16,9 @@ class Settings(BaseSettings):
 
     VEHICLE_ID: str 
 
+    TELEGRAM_BOT_TOKEN:str
+    TELEGRAM_CHAT_ID:str
+
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",
         env_file_encoding="utf-8",

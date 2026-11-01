@@ -6,7 +6,7 @@ from app.detectors.event_detector import (
 )
 
 
-
+    
 
 class CoolantOverheatDetector(BaseDetector):
     name = "coolant_overheat"
