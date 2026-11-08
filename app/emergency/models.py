@@ -32,6 +32,8 @@ class TriggerConditions(BaseModel):
     event_type: str
     road_types: list[str] | None = None   # None = هر نوع جاده
     min_risk: RiskLevel | None = None
+    is_winding: bool | None = None        # None = مهم نیست
+    is_parking_area: bool | None = None   # None = مهم نیست
 
 
 class Instruction(BaseModel):
@@ -49,6 +51,7 @@ class Instruction(BaseModel):
 class EmergencyContact(BaseModel):
     name: str
     number: str
+    verified: bool = False        # تا تأیید رسمی، False می‌ماند
 
 
 class EmergencyReport(BaseModel):
@@ -66,3 +69,17 @@ class EmergencyReport(BaseModel):
     risk_reasons: list[str]
     instruction_id: str | None
     contacts: list[EmergencyContact]
+    country_code: str | None = None
+    gps_timestamp: datetime | None = None   # زمان ثبت مختصات (برای تشخیص قدیمی‌بودن)
+
+
+class EmergencyResponse(BaseModel):
+    """خروجی سرویس برای UI یا لاگ. هر رویداد حداکثر دو پاسخ دارد."""
+
+    phase: Literal["initial", "final"]
+    event_type: str
+    event_timestamp: datetime
+    assessment: RiskAssessment
+    instruction: Instruction
+    report: EmergencyReport | None = None
+    message: str | None = None      # متن آماده‌ی ارسال به امدادگر

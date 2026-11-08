@@ -48,6 +48,7 @@ class RoadContext(BaseModel):
     no_stopping_tagged: bool | None = None
     lane_count: int | None = None
     is_winding: bool | None = None             # تخمین هندسی پیچ‌دار بودن
+    is_parking_area: bool | None = None        # پارکینگ (amenity=parking و ...)
     data_quality: Literal["ok", "partial", "unavailable"] = "unavailable"
     notes: list[str] = Field(default_factory=list)
 
