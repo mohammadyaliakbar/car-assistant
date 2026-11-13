@@ -24,12 +24,16 @@ from app.emergency import (
     RoadsideEmergencyService,
 )
 from app.location import RoadAnalyzer, SimulatedGpsSource
+from app.location.offline_provider import OfflineRoadProvider
 from app.logger import get_logger, setup_logging
 from app.notifications.telegram_notifier import TelegramNotifier
 from app.obd_client import OBDClient
 from app.vehicle_profiles import get_vehicle_profile
 
 setup_logging()
+# لاگ httpx آدرس کامل درخواست (شامل توکن بات تلگرام) را چاپ می‌کند
+for _name in ("httpx", "httpcore"):
+    logging.getLogger(_name).setLevel(logging.WARNING)
 logger = get_logger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -37,6 +41,8 @@ DATA_DIR = BASE_DIR / "data"
 DATA_FILE = DATA_DIR / "vehicle_data.json"
 EVENTS_FILE = DATA_DIR / "events.jsonl"
 EMERGENCY_FILE = DATA_DIR / "emergency.jsonl"
+# نقشه‌ی آفلاین جاده (ساخته‌شده با tools/build_road_db.py)
+ROADS_DB_FILE = DATA_DIR / "roads_tehran.sqlite"
 
 POLL_INTERVAL_S = 1.0
 MAX_CONSECUTIVE_ERRORS = 10
@@ -135,6 +141,18 @@ def emergency_to_event(
     )
 
 
+def build_road_analyzer() -> RoadAnalyzer:
+    """اول نقشه‌ی آفلاین، و در صورت نبودن یا خارج‌بودن نقطه، Overpass."""
+    if ROADS_DB_FILE.is_file():
+        logger.info("Offline road map enabled: %s", ROADS_DB_FILE)
+        return RoadAnalyzer(offline=OfflineRoadProvider(ROADS_DB_FILE))
+
+    logger.warning(
+        "Offline road map not found (%s); using Overpass only.", ROADS_DB_FILE
+    )
+    return RoadAnalyzer()
+
+
 def build_emergency_service(profile, telegram_notifier) -> RoadsideEmergencyService:
     def publish(response: EmergencyResponse) -> None:
         instruction = response.instruction
@@ -170,7 +188,7 @@ def build_emergency_service(profile, telegram_notifier) -> RoadsideEmergencyServ
             latitude=SIM_LAT,
             longitude=SIM_LON,
         ),
-        road_analyzer=RoadAnalyzer(),
+        road_analyzer=build_road_analyzer(),
         risk_analyzer=RiskAnalyzer(),
         recommender=RecommendationEngine(),
         contacts=EmergencyContacts(default_country=COUNTRY_CODE),
@@ -271,7 +289,10 @@ def run_cycle(
             event.vehicle_id,
             event.event_type,
         )
-        notify_telegram(telegram_notifier, event)
+        # رویدادهایی که سرویس اضطراری پوشش می‌دهد، با پیام‌های خودش
+        # (فوری و نهایی) به تلگرام می‌روند؛ ارسال نسخه‌ی خام تکراری است.
+        if event.event_type not in RoadsideEmergencyService.SUPPORTED_EVENTS:
+            notify_telegram(telegram_notifier, event)
 
     if events:
         save_events(events)
@@ -287,6 +308,7 @@ def main():
 
     client = None
     emergency = None
+    telegram_notifier = None
 
     try:
         # 1. دریافت پروفایل خودرو
@@ -367,11 +389,12 @@ def main():
     finally:
         if emergency is not None:
             emergency.close()
+        if telegram_notifier is not None:
+            # پیام‌های باقی‌مانده در صف (تا چند ثانیه) فرستاده می‌شوند
+            telegram_notifier.close(timeout=5.0)
         if client is not None:
             client.close()
             logger.info("OBD connection closed.")
-        if telegram_notifier is not None:
-            telegram_notifier.close()
 
 
 if __name__ == "__main__":

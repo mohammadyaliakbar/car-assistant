@@ -1,0 +1,20 @@
+{
+  "note": "شماره‌های این فایل ساختگی و آزمایشی هستند. قبل از استفاده‌ی واقعی باید با منبع رسمی جایگزین و verified=true شوند.",
+  "countries": {
+    "IR": {
+      "country_name": "ایران",
+      "contacts": [
+        {"name": "پلیس (آزمایشی)", "number": "0001", "verified": false},
+        {"name": "اورژانس (آزمایشی)", "number": "0002", "verified": false},
+        {"name": "آتش‌نشانی (آزمایشی)", "number": "0003", "verified": false},
+        {"name": "امداد خودرو (آزمایشی)", "number": "0004", "verified": false}
+      ]
+    },
+    "DEFAULT": {
+      "country_name": "پیش‌فرض",
+      "contacts": [
+        {"name": "امداد عمومی (آزمایشی)", "number": "0000", "verified": false}
+      ]
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+    "vehicle_id": "car_a",
+    "source": "OBD",
+    "timestamp": "2026-11-13T12:52:31.642438Z",
+    "data": {
+        "rpm": 1880.0,
+        "speed": 16.0,
+        "coolant_temperature_c": 83.0,
+        "engine_load_percent": 0.0,
+        "throttle_position_percent": 100.0,
+        "intake_temperature_c": 28.0,
+        "intake_pressure_kpa": 115.0,
+        "trouble_codes": [],
+        "diagnostic_status": null,
+        "control_module_voltage_v": 14.806000000000001
+    }
+}

@@ -9,6 +9,9 @@
 - نزدیک‌ترین راه همیشه راهِ درست نیست. اگر راهی پرسرعت در محدوده‌ی
   خطای GPS باشد، محافظه‌کارانه همان انتخاب می‌شود.
 - این ماژول لاین یا شانه را تشخیص نمی‌دهد و ادعا هم نمی‌کند.
+- اگر منبع آفلاین (`offline`) داده شود، اول از آن استفاده می‌شود و فقط وقتی
+  در دسترس نبود (فایل نیست، یا نقطه خارج از محدوده‌ی آن است) سراغ Overpass
+  می‌رود.
 """
 
 import logging
@@ -39,6 +42,8 @@ FAST_TYPES = frozenset({"motorway", "motorway_link", "trunk", "trunk_link"})
 NON_WINDING_JUNCTIONS = frozenset({"roundabout", "circular"})
 
 FetchFunction = Callable[[str, float], dict]
+
+OFFLINE_NOTE = "داده‌ی جاده از نقشه‌ی آفلاین (OpenStreetMap) خوانده شد."
 
 
 # ---------------------------------------------------------------- شبکه
@@ -232,8 +237,14 @@ class RoadAnalyzer:
         cache_size: int = 64,
         winding_deg_per_km: float = 250.0,
         clock: Callable[[], float] = time.monotonic,
+        offline: Any = None,
     ):
+        """
+        offline: شیئی با متد `fetch(lat, lon, radius_m, bay_radius_m) -> dict`
+        (مثلاً OfflineRoadProvider). اگر None باشد فقط Overpass استفاده می‌شود.
+        """
         self._fetch = fetch or partial(overpass_fetch, url=url)
+        self._offline = offline
         self.timeout_s = timeout_s
         self.search_radius_m = search_radius_m
         self.max_search_radius_m = max_search_radius_m
@@ -261,19 +272,42 @@ class RoadAnalyzer:
         if cached is not None:
             return cached
 
-        query = build_query(
-            fix.latitude, fix.longitude, radius, self.bay_radius_m,
-            server_timeout_s=int(self.timeout_s) + 2,
-        )
-        try:
-            data = self._fetch(query, self.timeout_s)
-        except Exception as exc:  # شبکه، timeout، HTTP، JSON، نبودن requests
-            logger.warning("Overpass request failed: %r", exc)
-            return RoadContext.unavailable(
-                f"دریافت اطلاعات نقشه ناموفق بود ({type(exc).__name__})."
+        data = None
+        used_offline = False
+        if self._offline is not None:
+            try:
+                data = self._offline.fetch(
+                    fix.latitude, fix.longitude, radius, self.bay_radius_m
+                )
+                used_offline = True
+            except FileNotFoundError:
+                logger.warning(
+                    "Offline road database not found; falling back to Overpass."
+                )
+            except Exception as exc:  # مثلاً خارج از محدوده‌ی پایگاه‌داده
+                logger.info(
+                    "Offline road data unavailable (%s); falling back to Overpass.",
+                    type(exc).__name__,
+                )
+
+        if data is None:
+            query = build_query(
+                fix.latitude, fix.longitude, radius, self.bay_radius_m,
+                server_timeout_s=int(self.timeout_s) + 2,
             )
+            try:
+                data = self._fetch(query, self.timeout_s)
+            except Exception as exc:  # شبکه، timeout، HTTP، JSON، نبودن requests
+                logger.warning("Overpass request failed: %r", exc)
+                return RoadContext.unavailable(
+                    f"دریافت اطلاعات نقشه ناموفق بود ({type(exc).__name__})."
+                )
 
         context = self.parse_response(data, fix, radius)
+        if used_offline and context.data_quality != "unavailable":
+            context = context.model_copy(
+                update={"notes": [*context.notes, OFFLINE_NOTE]}
+            )
         if context.data_quality != "unavailable":
             self._cache_put(key, context)  # شکست هرگز کش نمی‌شود
         return context

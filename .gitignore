@@ -13,7 +13,15 @@ venv/
 
 # Generated files
 logs/
-data/
+
 
 # IDE settings
 .vscode/
+
+#Data
+data/*.osm.pbf
+data/events.jsonl
+
+*.patch
+data/roads_tehran.sqlite
+data/*.pbf
