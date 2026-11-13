@@ -370,6 +370,8 @@ def main():
         if client is not None:
             client.close()
             logger.info("OBD connection closed.")
+        if telegram_notifier is not None:
+            telegram_notifier.close()
 
 
 if __name__ == "__main__":

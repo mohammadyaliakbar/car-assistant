@@ -72,8 +72,8 @@ def build_query(
         "(\n"
         f'  way(around:{radius_m:.0f},{point})[highway~"^({road_regex})$"];\n'
         f"  node(around:{bay_radius_m:.0f},{point})[highway=emergency_bay];\n"
-        f"  way(around:{bay_radius_m:.0f},{point})[highway=emergency_bay];\n"
         "  way(pivot.areas)[amenity=parking];\n"
+        f"  way(around:{bay_radius_m:.0f},{point})[highway=emergency_bay];\n"
         ");\n"
         "out geom;"
     )
