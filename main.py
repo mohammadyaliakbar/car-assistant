@@ -535,6 +535,11 @@ def main(argv=None, simulation: SimulationOptions | None = None) -> int:
             port_label = "simulator"
         else:
             port_label = args.port or settings.OBD_PORT
+            if not port_label:
+                raise ValueError(
+                    "OBD port is not set. Use --port or OBD_PORT in .env "
+                    "(or run with --simulate SCENARIO)."
+                )
             client = OBDClient(port_label)
 
         logger.info(

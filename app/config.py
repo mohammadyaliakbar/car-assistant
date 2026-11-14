@@ -1,6 +1,5 @@
 from pathlib import Path
 
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,12 +11,14 @@ class Settings(BaseSettings):
     LOG_TO_FILE: bool = True
     LOG_FILE: str = str(BASE_DIR / "logs" / "app.log")
 
-    OBD_PORT: str = Field(min_length=1)
+    # فقط برای اتصال واقعی به OBD لازم است؛ شبیه‌ساز به آن نیاز ندارد.
+    OBD_PORT: str = ""
 
-    VEHICLE_ID: str 
+    VEHICLE_ID: str = "car_a"
 
-    TELEGRAM_BOT_TOKEN:str
-    TELEGRAM_CHAT_ID:str
+    # خالی = تلگرام غیرفعال (main.py همین را بررسی می‌کند)
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_CHAT_ID: str = ""
 
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",

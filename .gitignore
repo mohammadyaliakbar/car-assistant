@@ -25,3 +25,13 @@ data/events.jsonl
 *.patch
 data/roads_tehran.sqlite
 data/*.pbf
+
+# Runtime vehicle data
+data/vehicle_data.json
+
+# Simulation output
+data/simulation/
+
+# Patch and diff files
+*.patch
+*.diff
