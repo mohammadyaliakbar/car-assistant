@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>شبیه‌ساز دستیار هوشمند خودرو</title>
+<link rel="stylesheet" href="vendor/leaflet.css">
+<style>
+:root{--bg:#0d1117;--card:#161b22;--line:#2a313c;--tx:#e6edf3;--mut:#8b949e;--g:#3fb950;--y:#d29922;--r:#f85149;--x:#6e7681;--ac:#58a6ff;color-scheme:dark}
+*{box-sizing:border-box}[hidden]{display:none!important}a{text-decoration:none}body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.5 "Vazirmatn",Tahoma,system-ui,sans-serif}
+header{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+header h1{font-size:16px;margin:0;flex:1}.sim{background:#3a2a05;color:var(--y);padding:2px 10px;border-radius:12px;font-size:12px;border:1px solid var(--y)}
+main{display:grid;grid-template-columns:300px 1fr 340px;gap:12px;padding:12px}
+@media(max-width:1100px){main{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:12px}
+.card h2{font-size:13px;margin:0 0 8px;color:var(--mut);font-weight:600}
+label{display:block;font-size:12px;color:var(--mut);margin:6px 0 2px}
+select,input{width:100%;background:#0d1117;color:var(--tx);border:1px solid var(--line);border-radius:6px;padding:5px 8px;font:inherit}
+button{background:#21262d;color:var(--tx);border:1px solid var(--line);border-radius:6px;padding:6px 10px;cursor:pointer;font:inherit}
+button:hover:not(:disabled){border-color:var(--ac)}button:disabled{opacity:.4;cursor:default}
+button.p{background:#1f6feb;border-color:#1f6feb}button.on{background:#1f6feb33;border-color:var(--ac)}
+.row{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.row>*{flex:1;min-width:70px}
+.chips{display:flex;gap:8px;flex-wrap:wrap}.chip{display:flex;align-items:center;gap:6px;background:#0d1117;border:1px solid var(--line);border-radius:16px;padding:3px 10px;font-size:12px}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--x)}.g{background:var(--g)}.y{background:var(--y)}.r{background:var(--r)}.x{background:var(--x)}
+.gauges{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}@media(max-width:700px){.gauges{grid-template-columns:repeat(2,1fr)}}
+.gauge{background:#0d1117;border:1px solid var(--line);border-radius:8px;padding:8px}.gauge small{color:var(--mut)}
+.gauge b{display:block;font-size:24px;direction:ltr;text-align:right}.bar{height:5px;background:var(--line);border-radius:3px;margin-top:4px;overflow:hidden}.bar i{display:block;height:100%;background:var(--x);width:0}
+#map{height:360px;border-radius:8px;background:#1b222c}.charts{display:grid;grid-template-columns:1fr 1fr;gap:10px}@media(max-width:700px){.charts{grid-template-columns:1fr}}
+.charts div{height:170px;position:relative}
+.list{max-height:200px;overflow:auto;font-size:12px}.item{border-inline-start:3px solid var(--x);padding:4px 8px;margin-bottom:5px;background:#0d1117;border-radius:4px}
+.item.warning{border-color:var(--y)}.item.critical{border-color:var(--r)}.item.info{border-color:var(--ac)}.item small{color:var(--mut);display:block}
+.mut{color:var(--mut);font-size:12px}ol{margin:4px 0;padding-inline-start:20px}.ltr{direction:ltr;unicode-bidi:embed}
+.note{font-size:11px;color:var(--y);margin-top:6px}.err{color:var(--r);font-size:12px;min-height:16px}
+</style>
+</head>
+<body>
+<header>
+  <h1>🚗 داشبورد شبیه‌ساز دستیار هوشمند خودرو</h1>
+  <span class="sim" id="rb" hidden style="color:#58a6ff;border-color:#58a6ff;background:#0d2238">REPLAY — بازپخش اجرای ذخیره‌شده</span>
+  <span class="sim">SIMULATOR — داده‌ی آزمایشی، نه داده‌ی واقعی خودرو</span>
+  <div class="chips">
+    <div class="chip"><span class="dot x" id="d-state"></span><span id="t-state">idle</span></div>
+    <div class="chip">زمان: <b class="ltr" id="t-time">00:00</b></div>
+  </div>
+</header>
+<main>
+<section>
+  <div class="card"><h2>سناریو</h2>
+    <select id="scn"></select><div class="mut" id="scn-desc" style="margin-top:6px"></div><div class="note" id="scn-cov"></div>
+    <label>زمان وقوع رویداد (ثانیه)</label><input id="evt" type="number" min="0" step="1">
+    <label>خودرو</label><select id="veh"><option value="car_a">Saipa Pride (car_a)</option><option value="car_b">Iran Khodro 206 TU5 (car_b)</option></select>
+    <label>اطلاعات جاده</label><select id="road"><option value="sim">ساختگی (آفلاین، قطعی)</option><option value="project" id="road-proj">RoadAnalyzer پروژه (دیتابیس آفلاین)</option></select>
+  </div>
+  <div class="card"><h2>کنترل اجرا</h2>
+    <div class="row"><button class="p" id="b-start">Start</button><button id="b-pause">Pause</button><button id="b-resume">Resume</button></div>
+    <div class="row"><button id="b-stop">Stop</button><button id="b-reset">Reset</button><button id="b-restart">Restart</button></div>
+    <label>سرعت اجرا</label><div class="row" id="speeds"></div>
+    <div class="err" id="err"></div>
+  </div>
+  <div class="card"><h2>مبدأ و مقصد (اختیاری)</h2>
+    <div class="row"><button id="p-start">انتخاب مبدأ از نقشه</button><button id="p-dest">انتخاب مقصد</button></div>
+    <label>مبدأ (lat, lon)</label><input id="c-start" class="ltr" placeholder="35.6997, 51.3380">
+    <label>مقصد (lat, lon)</label><input id="c-dest" class="ltr" placeholder="35.8000, 50.9950">
+    <label>نوع جاده</label><select id="c-type"><option value="highway">بزرگراه</option><option value="urban">شهری</option><option value="rural">خارج شهر</option></select>
+    <div class="row"><button id="c-clear">پاک‌کردن مسیر دلخواه</button></div>
+  </div>
+  <div class="card"><h2>تاریخچه‌ی سناریوها</h2>
+    <select id="hist"></select>
+    <div class="row"><button id="b-replay">بازپخش</button><button id="b-hrefresh" title="تازه‌سازی">↻</button></div>
+    <div class="row"><a href="/report.html" target="_blank"><button style="width:100%">📊 گزارش و ارزیابی عملکرد</button></a></div>
+    <div class="mut" style="margin-top:4px">هر اجرا خودکار ذخیره می‌شود (data/lab_history).</div>
+  </div>
+  <div class="card"><h2>تلگرام</h2>
+    <label style="display:flex;gap:8px;align-items:center;margin:0"><input id="tg" type="checkbox" style="width:auto"> ارسال واقعی پیام تلگرام</label>
+    <div class="mut" style="margin-top:4px">پیش‌فرض خاموش؛ پیام‌ها با برچسب [SIMULATION] می‌روند.</div>
+  </div>
+</section>
+
+<section>
+  <div class="card"><div class="chips" id="chips"></div></div>
+  <div class="card"><div class="gauges">
+    <div class="gauge"><small>سرعت (km/h)</small><b id="v-speed">—</b><div class="bar"><i id="r-speed"></i></div></div>
+    <div class="gauge"><small>دور موتور (RPM)</small><b id="v-rpm">—</b><div class="bar"><i id="r-rpm"></i></div></div>
+    <div class="gauge"><small>دمای خنک‌کننده (°C)</small><b id="v-cool">—</b><div class="bar"><i id="r-cool"></i></div></div>
+    <div class="gauge"><small>ولتاژ (V)</small><b id="v-volt">—</b><div class="bar"><i id="r-volt"></i></div></div>
+  </div></div>
+  <div class="card"><h2>نقشه‌ی زنده <span class="mut" id="map-info"></span></h2><div id="map"></div></div>
+  <div class="card"><h2>نمودارهای زنده</h2><div class="charts">
+    <div><canvas id="c-speed"></canvas></div><div><canvas id="c-rpm"></canvas></div>
+    <div><canvas id="c-cool"></canvas></div><div><canvas id="c-volt"></canvas></div></div></div>
+</section>
+
+<section>
+  <div class="card"><h2>هشدارهای فعال</h2><div class="list" id="alerts"><span class="mut">هشداری نیست</span></div></div>
+  <div class="card"><h2>دستیار اضطراری <span class="mut">(راهنمای شبیه‌سازی)</span></h2><div id="emerg" class="mut">پاسخی هنوز تولید نشده.</div>
+    <div class="note">این توصیه‌ها فقط برای نمایش شبیه‌سازی‌اند و جایگزین دستورالعمل رسمی امداد جاده‌ای نیستند.</div></div>
+  <div class="card"><h2>تاریخچه‌ی رویدادها</h2><div class="list" id="events"><span class="mut">رویدادی ثبت نشده</span></div></div>
+  <div class="card"><h2>نتیجه‌ی اجرا</h2><div id="summary" class="mut">—</div></div>
+</section>
+</main>
+<script src="vendor/leaflet.js"></script>
+<script src="vendor/chart.umd.js"></script>
+<script>
+const $=id=>document.getElementById(id), esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const COL={g:"#3fb950",y:"#d29922",r:"#f85149",x:"#6e7681"}, FA={normal:"عادی",info:"اطلاعات",warning:"هشدار",critical:"بحرانی"};
+const VERD={detected_by_detector:"✅ تشخیص واقعی توسط Detector",no_events_as_expected:"✅ بدون رویداد (مطابق انتظار)",status_only_no_detector:"ℹ️ فقط وضعیت داشبورد؛ Detector ندارد",missed_by_detector:"❌ تشخیص داده نشد",false_alarm:"❌ هشدار اشتباه"};
+let CFG, frames=[], lastState="idle", pick=null, markers={}, shownEmerg=0;
+async function api(p,b){const r=await fetch("/api/"+p,b===undefined?{}:{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)});return r.json()}
+const mmss=t=>String(Math.floor(t/60)).padStart(2,"0")+":"+String(Math.floor(t%60)).padStart(2,"0");
+const parseLL=s=>{const m=String(s).split(/[ ,;]+/).filter(Boolean).map(Number);return m.length==2&&m.every(Number.isFinite)&&Math.abs(m[0])<=90&&Math.abs(m[1])<=180?m:null};
+
+// ---- نقشه
+const map=L.map("map",{zoomControl:true}).setView([35.70,51.30],11);
+L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",{maxZoom:18,attribution:"© OpenStreetMap, © CARTO"}).addTo(map);
+const routeLine=L.polyline([],{color:"#58a6ff",weight:4,opacity:.45}).addTo(map), trail=L.polyline([],{color:"#3fb950",weight:4}).addTo(map);
+const car=L.circleMarker([0,0],{radius:9,color:"#fff",weight:2,fillColor:COL.g,fillOpacity:1});
+const pin=(ll,c,t)=>L.circleMarker(ll,{radius:8,color:"#fff",weight:2,fillColor:c,fillOpacity:1}).bindTooltip(t,{permanent:false});
+function showRoute(pts){routeLine.setLatLngs(pts);if(pts.length)map.fitBounds(routeLine.getBounds(),{padding:[30,30]})}
+function curRoute(){const s=parseLL($("c-start").value),d=parseLL($("c-dest").value);return s&&d?[s,d]:null}
+function previewRoute(){const c=curRoute();if(c)return showRoute(c);const s=CFG&&CFG.scenarios.find(x=>x.name==$("scn").value);if(s)showRoute(CFG.routes[s.route].points)}
+map.on("click",e=>{if(!pick)return;$(pick==="s"?"c-start":"c-dest").value=e.latlng.lat.toFixed(5)+", "+e.latlng.lng.toFixed(5);pick=null;document.querySelectorAll("[id^=p-]").forEach(b=>b.classList.remove("on"));previewRoute()});
+["start","dest"].forEach(k=>$("p-"+k).onclick=()=>{pick=k[0];$("p-"+k).classList.add("on")});
+$("c-clear").onclick=()=>{$("c-start").value=$("c-dest").value="";previewRoute()};
+["c-start","c-dest"].forEach(i=>$(i).onchange=previewRoute);
+
+// ---- نمودارها
+const mk=(id,label,color,extra=[])=>new Chart($(id),{type:"line",data:{labels:[],datasets:[{label,data:[],borderColor:color,pointRadius:0,borderWidth:2,tension:.2},...extra.map(e=>({label:e[0],data:[],borderColor:e[1],borderDash:[5,4],pointRadius:0,borderWidth:1,_v:e[2]}))]},
+ options:{animation:false,responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{labels:{color:"#8b949e",boxWidth:10,font:{size:11}}}},scales:{x:{ticks:{color:"#8b949e",maxTicksLimit:6,callback(v){return mmss(this.getLabelForValue(v))}},grid:{color:"#222a35"}},y:{ticks:{color:"#8b949e"},grid:{color:"#222a35"}}}}});
+let CH={};
+function initCharts(){const t=CFG.thresholds;CH={speed:mk("c-speed","Vehicle Speed (km/h)","#58a6ff"),rpm:mk("c-rpm","Engine RPM","#a371f7"),
+ cool:mk("c-cool","Coolant Temp (°C)","#f0883e",[["warning",COL.y,t.coolant_warning_c],["critical",COL.r,t.coolant_critical_c]]),
+ volt:mk("c-volt","Battery Voltage (V)","#3fb950",[["charging min",COL.y,t.voltage_charging_min_v]])}}
+function pushChart(c,t,v){c.data.labels.push(t);c.data.datasets[0].data.push(v);c.data.datasets.slice(1).forEach(d=>d.data.push(d._v))}
+function clearAll(){frames=[];shownEmerg=0;Object.values(CH).forEach(c=>{c.data.labels=[];c.data.datasets.forEach(d=>d.data=[]);c.update()});
+ trail.setLatLngs([]);Object.values(markers).forEach(m=>map.removeLayer(m));markers={};map.removeLayer(car);
+ $("alerts").innerHTML='<span class="mut">هشداری نیست</span>';$("events").innerHTML='<span class="mut">رویدادی ثبت نشده</span>';
+ $("emerg").innerHTML="پاسخی هنوز تولید نشده.";["speed","rpm","cool","volt"].forEach(k=>{$("v-"+k).textContent="—";$("r-"+k).style.width=0});chip([])}
+const chip=a=>$("chips").innerHTML=a.map(([n,c,v])=>`<div class="chip"><span class="dot ${c}"></span>${n}: <b>${esc(v)}</b></div>`).join("");
+const setBar=(k,pct,c)=>{const e=$("r-"+k);e.style.width=Math.max(0,Math.min(100,pct))+"%";e.style.background=COL[c]};
+
+function render(f){
+  const o=f.obd,t=CFG.thresholds,col=o.coolant_temperature_c>=t.coolant_critical_c?"r":o.coolant_temperature_c>=t.coolant_warning_c?"y":"g";
+  const vc=f.engine_on&&o.control_module_voltage_v<t.voltage_charging_min_v?"y":"g";
+  $("v-speed").textContent=o.speed.toFixed(0);$("v-rpm").textContent=o.rpm.toFixed(0);$("v-cool").textContent=o.coolant_temperature_c.toFixed(1);$("v-volt").textContent=o.control_module_voltage_v.toFixed(2);
+  setBar("speed",o.speed/180*100,"g");setBar("rpm",o.rpm/7000*100,"g");setBar("cool",(o.coolant_temperature_c-60)/70*100,col);setBar("volt",(o.control_module_voltage_v-10)/6*100,vc);
+  ["speed","rpm","cool","volt"].forEach((k,i)=>pushChart(CH[k],f.t,[o.speed,o.rpm,o.coolant_temperature_c,o.control_module_voltage_v][i]));
+  Object.values(CH).forEach(c=>c.update("none"));
+  const g=f.gps,dc={normal:"g",info:"g",warning:"y",critical:"r"}[f.danger_level];
+  chip([["موتور",f.engine_on?"g":"r",f.engine_on?"روشن":"خاموش"],["GPS",g.status=="connected"?"g":g.status=="disconnected"?"y":"x",g.status=="connected"?"Connected":g.status=="disconnected"?"Disconnected":"N/A"],
+   ["سطح خطر",dc,FA[f.danger_level]],["هشدار فعال",f.alerts.length?(f.alerts.some(a=>a.severity=="critical")?"r":"y"):"g",f.alerts.length],["جاده",f.road_type?"g":"x",f.road_type],["OBD",f.validation.errors.length?"r":"g",f.validation.errors.length?"خطا":"معتبر"]]);
+  $("t-time").textContent=mmss(f.t);
+  if(g.latitude!=null){const ll=[g.latitude,g.longitude];
+    if(g.live){trail.addLatLng(ll);car.setStyle({fillColor:COL[dc]});if(!map.hasLayer(car))car.addTo(map);car.setLatLng(ll);if(!map.getBounds().contains(ll))map.panTo(ll)}
+    else{car.setStyle({fillColor:COL.x});car.setLatLng(ll);if(!markers.lost)markers.lost=pin(ll,COL.x,"آخرین موقعیت معتبر (زنده نیست)").addTo(map)}
+    if(g.live&&markers.lost){map.removeLayer(markers.lost);delete markers.lost}
+    if(f.events.length&&!markers.fail)markers.fail=pin(ll,COL.r,"محل وقوع خرابی: "+f.events[0].event_type).addTo(map);
+    if(f.t>5&&o.speed==0&&!markers.stop)markers.stop=pin(ll,COL.y,"خودرو متوقف شد").addTo(map);
+    $("map-info").textContent=`${ll[0].toFixed(5)}, ${ll[1].toFixed(5)} — ${g.live?"زنده":"موقعیت قدیمی ("+g.age_s+"s)"}`}
+  $("alerts").innerHTML=f.alerts.length?f.alerts.map(a=>`<div class="item ${a.severity}"><b>${esc(a.event_type)}</b> — ${FA[a.severity]}<small>${esc(a.message)} · ${a.source=="detector"?"Detector: "+esc(a.detector):"وضعیت شبیه‌ساز (نه Detector)"} · t=${mmss(a.first_t)}</small></div>`).join(""):'<span class="mut">هشداری نیست</span>';
+  f.events.forEach(e=>{const d=$("events");if(d.querySelector(".mut"))d.innerHTML="";const code=e.details.code?` (${esc(e.details.code)}: ${esc(f.dtc_descriptions[e.details.code]||"")})`:"";
+    d.insertAdjacentHTML("afterbegin",`<div class="item ${e.severity}"><b>${esc(e.event_type)}</b>${code} — ${FA[e.severity]}<small>${esc(e.detector)} · t=${mmss(f.t)} · ${g.latitude!=null?g.latitude.toFixed(4)+", "+g.longitude.toFixed(4):"بدون GPS"}</small></div>`)});
+  f.emergency.forEach(r=>{const i=r.instruction,rep=r.report;$("emerg").innerHTML=`<b>${esc(i.title)}</b> <span class="mut">(فاز ${r.phase==="initial"?"فوری":"نهایی"} · خطر: ${esc(r.assessment.level)} · ${r.generation_ms}ms)</span><div>${esc(i.headline)}</div><ol>${i.steps.map(s=>`<li>${esc(s)}</li>`).join("")}</ol>${i.warnings.map(w=>`<div class="note">⚠️ ${esc(w)}</div>`).join("")}${rep&&rep.latitude!=null?`<div class="mut ltr">GPS: ${rep.latitude.toFixed(5)}, ${rep.longitude.toFixed(5)}</div>`:""}${r.assessment.reasons.map(x=>`<div class="mut">• ${esc(x)}</div>`).join("")}${i.status==="draft"?'<div class="note">راهنمای پیش‌نویس و تأییدنشده</div>':""}`});
+}
+function renderSummary(s){if(!s){$("summary").textContent="—";return}
+  $("summary").innerHTML=`<div>${VERD[s.verdict]||s.verdict}</div><div>رویدادها: ${s.events} · هشدار اشتباه: ${s.false_alarms} · پاسخ اضطراری: ${s.emergency_responses}</div>`+
+  s.expected.map(r=>`<div>${esc(r.detector)}/${esc(r.event_type)}: ${r.detected?"تشخیص در t="+r.detected_at_s+" (تأخیر "+r.detection_latency_s+"s)":"هنوز تشخیص داده نشده"}</div>`).join("")+`<div class="note">${esc(s.coverage_note)}</div>`}
+
+// ---- تاریخچه و بازپخش
+const STA={finished:"کامل",stopped:"متوقف‌شده",aborted:"نیمه‌کاره",error:"خطا"};
+async function loadHist(){const h=await api("history"),sel=$("hist"),cur=sel.value;
+  sel.innerHTML=h.runs.length?h.runs.map(m=>`<option value="${esc(m.run_id)}">${esc(m.title_fa)} · ${esc(new Date(m.started_at).toLocaleString("fa-IR"))} · ${STA[m.status]||esc(m.status)}</option>`).join(""):'<option value="">— هنوز اجرایی ذخیره نشده —</option>';
+  if(cur&&[...sel.options].some(o=>o.value==cur))sel.value=cur;$("b-replay").disabled=!h.runs.length}
+$("b-hrefresh").onclick=loadHist;
+$("b-replay").onclick=async()=>{if(!$("hist").value)return;clearAll();const r=await api("start",{replay:$("hist").value});$("err").textContent=r.ok?"":r.error||"خطا"};
+
+// ---- حلقه‌ی polling
+async function poll(){try{const s=await api("state?from="+frames.length);
+  if(s.frame_count<frames.length||(s.state=="idle"&&frames.length)){clearAll()}
+  s.frames.forEach(f=>{frames.push(f);render(f)});
+  $("t-state").textContent=s.state;$("d-state").className="dot "+({running:"g",paused:"y",error:"r"}[s.state]||"x");
+  renderSummary(s.summary);const st=s.state,run=st=="running",pa=st=="paused";
+  $("b-pause").disabled=!run;$("b-resume").disabled=!pa;$("b-stop").disabled=!(run||pa);$("b-restart").disabled=!s.scenario;$("b-reset").disabled=st=="idle";
+  document.querySelectorAll("#speeds button").forEach(b=>b.classList.toggle("on",+b.dataset.x==s.speed));
+  $("rb").hidden=!String(s.scenario||"").startsWith("replay:");
+  if(st!==lastState&&["finished","stopped","error","idle"].includes(st))setTimeout(loadHist,700);
+  if(s.error)$("err").textContent=s.error;lastState=st}catch(e){$("t-state").textContent="قطع ارتباط با سرور"}
+  setTimeout(poll,300)}
+const act=(p,b)=>async()=>{const r=await api(p,b===undefined?{}:b());$("err").textContent=r.ok?"":r.error||"خطا"};
+$("b-pause").onclick=act("pause");$("b-resume").onclick=act("resume");$("b-stop").onclick=act("stop");$("b-reset").onclick=async()=>{await act("reset")();clearAll();previewRoute()};$("b-restart").onclick=async()=>{clearAll();await act("restart")()};
+$("b-start").onclick=async()=>{clearAll();const body={scenario:$("scn").value,vehicle_id:$("veh").value,road_source:$("road").value==="project"?"project":"sim"};
+  if($("evt").value!=="")body.event_time_s=+$("evt").value;const c=curRoute();if(c){body.start=c[0];body.destination=c[1];body.road_type=$("c-type").value}
+  const r=await api("start",body);$("err").textContent=r.ok?"":r.error||"خطا"};
+$("tg").onchange=async e=>{const r=await api("telegram",{enabled:e.target.checked});if(!r.ok){e.target.checked=false;$("err").textContent=r.error}};
+$("scn").onchange=()=>{const s=CFG.scenarios.find(x=>x.name==$("scn").value);$("scn-desc").textContent=s.description;$("scn-cov").textContent=s.coverage_note;$("evt").value=s.event_time_s;previewRoute()};
+
+(async()=>{CFG=await (await fetch("/api/config")).json();
+  $("scn").innerHTML=CFG.scenarios.map(s=>`<option value="${s.name}">${esc(s.title_fa)} — ${esc(s.title_en)}</option>`).join("");
+  $("speeds").innerHTML=CFG.speeds.map(x=>`<button data-x="${x}">${x}x</button>`).join("");
+  document.querySelectorAll("#speeds button").forEach(b=>b.onclick=()=>api("speed",{multiplier:+b.dataset.x}));
+  $("road-proj").disabled=!CFG.project_road_available;$("tg").disabled=!CFG.telegram_configurable;
+  initCharts();$("scn").onchange();loadHist();poll();
+  const q=new URLSearchParams(location.search).get("replay");if(q){const r=await api("start",{replay:q});if(!r.ok)$("err").textContent=r.error}})();
+</script>
+</body>
+</html>

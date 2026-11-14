@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>گزارش ارزیابی عملکرد — شبیه‌ساز</title>
+<style>
+:root{--bg:#0d1117;--card:#161b22;--line:#2a313c;--tx:#e6edf3;--mut:#8b949e;--g:#3fb950;--y:#d29922;--r:#f85149;--ac:#58a6ff;color-scheme:dark}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.6 "Vazirmatn",Tahoma,system-ui,sans-serif;padding:16px;max-width:1300px;margin-inline:auto}
+a{color:var(--ac);text-decoration:none}h1{font-size:18px;margin:0 0 4px}h2{font-size:14px;color:var(--mut);margin:18px 0 8px}
+.top{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}.top .sp{flex:1}
+.btn{background:#21262d;color:var(--tx);border:1px solid var(--line);border-radius:6px;padding:6px 12px;display:inline-block}.btn:hover{border-color:var(--ac)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}.c{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px}.c small{color:var(--mut)}.c b{display:block;font-size:24px}
+.wrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:10px}table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:start;white-space:nowrap}th{color:var(--mut);font-weight:600;background:#11161d}
+.g{color:var(--g)}.y{color:var(--y)}.r{color:var(--r)}.mut{color:var(--mut);font-size:12px}.ltr{direction:ltr;unicode-bidi:embed}
+</style>
+</head>
+<body>
+<div class="top"><div><h1>📊 گزارش و ارزیابی عملکرد سیستم</h1><div class="mut">داده‌ها از اجراهای ذخیره‌شده‌ی شبیه‌ساز می‌آیند (نه خودروی واقعی).</div></div><span class="sp"></span>
+<a class="btn" href="/">← داشبورد</a><a class="btn" href="/api/report.csv?by=scenario">⬇ CSV به تفکیک سناریو</a><a class="btn" href="/api/report.csv">⬇ CSV همه‌ی اجراها</a></div>
+<div class="cards" id="cards"></div>
+<h2>به تفکیک سناریو</h2><div class="wrap"><table id="scn"></table></div>
+<h2>همه‌ی اجراها</h2><div class="wrap"><table id="runs"></table></div>
+<p class="mut" id="note"></p>
+<script>
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const n=v=>v==null?"—":v, L=v=>`<span class="ltr">${v}</span>`, ST={finished:"کامل",stopped:"متوقف‌شده",aborted:"نیمه‌کاره",error:"خطا"};
+const VD={detected_by_detector:["✅ تشخیص واقعی توسط Detector","g"],no_events_as_expected:["✅ بدون رویداد (مطابق انتظار)","g"],status_only_no_detector:["ℹ️ فقط وضعیت داشبورد (Detector ندارد)","y"],missed_by_detector:["❌ تشخیص داده نشد","r"],false_alarm:["❌ هشدار اشتباه","r"]};
+const table=(el,head,rows)=>document.getElementById(el).innerHTML="<tr>"+head.map(h=>`<th>${h}</th>`).join("")+"</tr>"+(rows.length?rows.map(r=>"<tr>"+r.map(c=>`<td>${c}</td>`).join("")+"</tr>").join(""):`<tr><td colspan="${head.length}" class="mut">هنوز اجرایی ذخیره نشده است. در داشبورد یک سناریو اجرا کنید.</td></tr>`);
+(async()=>{const r=await (await fetch("/api/report")).json(),t=r.totals;
+ const card=(l,v,c="")=>`<div class="c"><small>${l}</small><b class="${c}">${v}</b></div>`;
+ document.getElementById("cards").innerHTML=card("سناریوهای اجراشده",t.runs)+card("اجرای کامل",t.finished_runs)+card("اجرای نیمه‌کاره",t.incomplete_runs,t.incomplete_runs?"y":"")+card("خرابی‌های شناسایی‌شده (صحیح)",t.correct_detections,"g")+card("تشخیص‌نشده",t.missed,t.missed?"r":"")+card("هشدارهای صادرشده",t.alerts_issued)+card("هشدارهای اشتباه",t.false_alarms,t.false_alarms?"r":"g")+card("پاسخ‌های اضطراری",t.emergency_responses);
+ table("scn",["سناریو","اجرا","کامل","تشخیص صحیح","تشخیص‌نشده","هشدار اشتباه","هشدار صادرشده","تأخیر تشخیص میانگین (s)","کمترین / بیشترین (s)","پاسخ اضطراری","میانگین زمان تولید پاسخ (ms)"],
+  r.scenarios.map(s=>[esc(s.title_fa),s.runs,s.finished_runs,s.correct_detections,s.missed,s.false_alarms,s.alerts_issued,n(s.mean_detection_latency_s),L(n(s.min_detection_latency_s)+" / "+n(s.max_detection_latency_s)),s.emergency_responses,n(s.mean_emergency_generation_ms)]));
+ table("runs",["سناریو","وضعیت","شروع","پایان","نتیجه","تشخیص صحیح / انتظار","هشدار اشتباه","هشدار","تأخیر (s)","سطح خطر","عملیات"],
+  r.runs.map(m=>{const x=m.metrics,v=VD[x.verdict]||[x.verdict,""],lat=x.detection_latencies_s.length?L(x.detection_latencies_s.join(", ")):"—";
+   return [esc(m.title_fa),ST[m.status]||esc(m.status),`<span class="ltr">${esc(new Date(m.started_at).toLocaleString("fa-IR"))}</span>`,`<span class="ltr">${esc(new Date(m.ended_at).toLocaleString("fa-IR"))}</span>`,`<span class="${v[1]}">${v[0]}</span>`,L(x.detected+" / "+x.expected),x.false_alarms,x.alerts_issued,lat,esc(x.max_danger_level),`<a href="/?replay=${encodeURIComponent(m.run_id)}">بازپخش</a> · <a href="/api/history/${encodeURIComponent(m.run_id)}" download="${esc(m.run_id)}.json">JSON</a>`]}));
+ document.getElementById("note").textContent=r.note})();
+</script>
+</body>
+</html>

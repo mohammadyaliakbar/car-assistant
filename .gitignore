@@ -35,3 +35,6 @@ data/simulation/
 # Patch and diff files
 *.patch
 *.diff
+
+# Lab history
+data/lab_history/
