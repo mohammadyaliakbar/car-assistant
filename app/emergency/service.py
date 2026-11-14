@@ -34,7 +34,8 @@ class RoadsideEmergencyService:
     خودکاری برقرار نمی‌شود.
     """
 
-    SUPPORTED_EVENTS = frozenset({"engine_stalled_while_moving"})
+    CRASH_EVENT = "crash_suspected"
+    SUPPORTED_EVENTS = frozenset({"engine_stalled_while_moving", CRASH_EVENT})
 
     def __init__(
         self,
@@ -71,7 +72,9 @@ class RoadsideEmergencyService:
 
         self._lock = threading.Lock()
         self._generation = 0
-        self._last_event_time: datetime | None = None
+        # تکراری‌بودن فقط در همان نوع رویداد سنجیده می‌شود (خاموشی موتور
+        # که نتیجه‌ی تصادف است نباید رویداد تصادف را حذف کند)
+        self._last_event_times: dict[str, datetime] = {}
 
     # ------------------------------------------------------------ API
 
@@ -86,12 +89,14 @@ class RoadsideEmergencyService:
         """
         if event.event_type not in self.SUPPORTED_EVENTS:
             return None
+        if event.event_type == self.CRASH_EVENT:
+            crash_suspected = True   # خودِ رویداد یعنی احتمال تصادف
 
         with self._lock:
             if self._is_duplicate(event):
                 logger.info("Duplicate emergency event ignored: %s", event.event_type)
                 return None
-            self._last_event_time = event.timestamp
+            self._last_event_times[event.event_type] = event.timestamp
             self._generation += 1
             generation = self._generation
 
@@ -151,7 +156,7 @@ class RoadsideEmergencyService:
     # ------------------------------------------------------------ کمکی
 
     def _is_duplicate(self, event: DetectionEvent) -> bool:
-        last = self._last_event_time
+        last = self._last_event_times.get(event.event_type)
         if last is None:
             return False
         return (event.timestamp - last).total_seconds() < self.cooldown_s

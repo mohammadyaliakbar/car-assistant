@@ -22,6 +22,7 @@ REPORT_LEVELS = {RiskLevel.HIGH, RiskLevel.CRITICAL, RiskLevel.UNKNOWN}
 
 EVENT_LABELS = {
     "engine_stalled_while_moving": "خاموش شدن موتور هنگام حرکت",
+    "crash_suspected": "تصادف احتمالی",
 }
 RISK_LABELS = {
     RiskLevel.LOW: "کم",

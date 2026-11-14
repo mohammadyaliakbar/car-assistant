@@ -1,0 +1,20 @@
+{
+    "vehicle_id": "car_a",
+    "source": "SIMULATOR",
+    "timestamp": "2026-11-14T08:28:57.295977Z",
+    "data": {
+        "rpm": 0.0,
+        "speed": 0.0,
+        "coolant_temperature_c": 90.0,
+        "engine_load_percent": 0.0,
+        "throttle_position_percent": 0.0,
+        "intake_temperature_c": 35.0,
+        "intake_pressure_kpa": 100.0,
+        "trouble_codes": [],
+        "diagnostic_status": {
+            "mil_on": false,
+            "dtc_count": 0
+        },
+        "control_module_voltage_v": 12.4
+    }
+}
