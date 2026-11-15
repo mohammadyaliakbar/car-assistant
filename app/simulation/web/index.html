@@ -30,6 +30,7 @@ button.p{background:#1f6feb;border-color:#1f6feb}button.on{background:#1f6feb33;
 .list{max-height:200px;overflow:auto;font-size:12px}.item{border-inline-start:3px solid var(--x);padding:4px 8px;margin-bottom:5px;background:#0d1117;border-radius:4px}
 .item.warning{border-color:var(--y)}.item.critical{border-color:var(--r)}.item.info{border-color:var(--ac)}.item small{color:var(--mut);display:block}
 .mut{color:var(--mut);font-size:12px}ol{margin:4px 0;padding-inline-start:20px}.ltr{direction:ltr;unicode-bidi:embed}
+.gate{border-color:var(--r);background:#2a1214}.gate b{font-size:14px}
 .note{font-size:11px;color:var(--y);margin-top:6px}.err{color:var(--r);font-size:12px;min-height:16px}
 </style>
 </head>
@@ -50,6 +51,13 @@ button.p{background:#1f6feb;border-color:#1f6feb}button.on{background:#1f6feb33;
     <label>زمان وقوع رویداد (ثانیه)</label><input id="evt" type="number" min="0" step="1">
     <label>خودرو</label><select id="veh"><option value="car_a">Saipa Pride (car_a)</option><option value="car_b">Iran Khodro 206 TU5 (car_b)</option></select>
     <label>اطلاعات جاده</label><select id="road"><option value="sim">ساختگی (آفلاین، قطعی)</option><option value="project" id="road-proj">RoadAnalyzer پروژه (دیتابیس آفلاین)</option></select>
+    <div id="crash-opts" hidden>
+      <label>پاسخ راننده‌ی شبیه‌سازی‌شده</label><select id="drv"><option value="none">پاسخ نمی‌دهد (دستی یا تایم‌اوت)</option><option value="confirm">تأیید می‌کند</option><option value="decline">رد می‌کند</option></select>
+      <label>تأخیر پاسخ (ثانیه‌ی شبیه‌سازی)</label><input id="drv-d" type="number" min="0" value="5">
+      <label>تایم‌اوت تأیید (ثانیه‌ی شبیه‌سازی)</label><input id="to" type="number" min="1" value="60">
+      <label>در صورت تایم‌اوت</label><select id="ont"><option value="send">هشدار ارسال شود</option><option value="skip">ارسال نشود</option></select>
+      <div class="mut">زمان‌ها بر حسب ثانیه‌ی شبیه‌سازی‌اند؛ برای پاسخ دستی از 1x تا 5x استفاده کنید.</div>
+    </div>
   </div>
   <div class="card"><h2>کنترل اجرا</h2>
     <div class="row"><button class="p" id="b-start">Start</button><button id="b-pause">Pause</button><button id="b-resume">Resume</button></div>
@@ -87,10 +95,13 @@ button.p{background:#1f6feb;border-color:#1f6feb}button.on{background:#1f6feb33;
   <div class="card"><h2>نقشه‌ی زنده <span class="mut" id="map-info"></span></h2><div id="map"></div></div>
   <div class="card"><h2>نمودارهای زنده</h2><div class="charts">
     <div><canvas id="c-speed"></canvas></div><div><canvas id="c-rpm"></canvas></div>
-    <div><canvas id="c-cool"></canvas></div><div><canvas id="c-volt"></canvas></div></div></div>
+    <div><canvas id="c-cool"></canvas></div><div><canvas id="c-volt"></canvas></div>
+    <div id="cg-wrap" hidden><canvas id="c-g"></canvas></div></div></div>
 </section>
 
 <section>
+  <div class="card gate" id="gate" hidden><h2>🚨 تأیید راننده (تصادف احتمالی)</h2><div id="gate-t"></div>
+    <div class="row"><button class="p" id="g-yes">✅ تأیید و ارسال هشدار</button><button id="g-no">🚫 رد (ارسال نشود)</button></div><div class="mut" id="gate-n"></div></div>
   <div class="card"><h2>هشدارهای فعال</h2><div class="list" id="alerts"><span class="mut">هشداری نیست</span></div></div>
   <div class="card"><h2>دستیار اضطراری <span class="mut">(راهنمای شبیه‌سازی)</span></h2><div id="emerg" class="mut">پاسخی هنوز تولید نشده.</div>
     <div class="note">این توصیه‌ها فقط برای نمایش شبیه‌سازی‌اند و جایگزین دستورالعمل رسمی امداد جاده‌ای نیستند.</div></div>
@@ -129,22 +140,31 @@ const mk=(id,label,color,extra=[])=>new Chart($(id),{type:"line",data:{labels:[]
 let CH={};
 function initCharts(){const t=CFG.thresholds;CH={speed:mk("c-speed","Vehicle Speed (km/h)","#58a6ff"),rpm:mk("c-rpm","Engine RPM","#a371f7"),
  cool:mk("c-cool","Coolant Temp (°C)","#f0883e",[["warning",COL.y,t.coolant_warning_c],["critical",COL.r,t.coolant_critical_c]]),
- volt:mk("c-volt","Battery Voltage (V)","#3fb950",[["charging min",COL.y,t.voltage_charging_min_v]])}}
+ volt:mk("c-volt","Battery Voltage (V)","#3fb950",[["charging min",COL.y,t.voltage_charging_min_v]]),
+ g:mk("c-g","Phone Acceleration — peak (g)","#ff7b72",[["impact threshold",COL.r,CFG.crash.impact_g]])}}
 function pushChart(c,t,v){c.data.labels.push(t);c.data.datasets[0].data.push(v);c.data.datasets.slice(1).forEach(d=>d.data.push(d._v))}
-function clearAll(){frames=[];shownEmerg=0;Object.values(CH).forEach(c=>{c.data.labels=[];c.data.datasets.forEach(d=>d.data=[]);c.update()});
+function clearAll(){frames=[];shownEmerg=0;$("cg-wrap").hidden=true;$("gate").hidden=true;Object.values(CH).forEach(c=>{c.data.labels=[];c.data.datasets.forEach(d=>d.data=[]);c.update()});
  trail.setLatLngs([]);Object.values(markers).forEach(m=>map.removeLayer(m));markers={};map.removeLayer(car);
  $("alerts").innerHTML='<span class="mut">هشداری نیست</span>';$("events").innerHTML='<span class="mut">رویدادی ثبت نشده</span>';
  $("emerg").innerHTML="پاسخی هنوز تولید نشده.";["speed","rpm","cool","volt"].forEach(k=>{$("v-"+k).textContent="—";$("r-"+k).style.width=0});chip([])}
 const chip=a=>$("chips").innerHTML=a.map(([n,c,v])=>`<div class="chip"><span class="dot ${c}"></span>${n}: <b>${esc(v)}</b></div>`).join("");
 const setBar=(k,pct,c)=>{const e=$("r-"+k);e.style.width=Math.max(0,Math.min(100,pct))+"%";e.style.background=COL[c]};
 
+const GS={waiting:"⏳ در انتظار پاسخ راننده",confirmed:"✅ راننده تأیید کرد — هشدار آزاد شد",declined:"🚫 راننده رد کرد — پیام‌های تصادف ارسال نمی‌شوند",timeout_sent:"⌛ پاسخی نیامد — طبق سیاست، هشدار ارسال شد",timeout_skipped:"⌛ پاسخی نیامد — طبق سیاست، ارسال نشد (تأیید دیرهنگام هنوز ممکن است)",late_confirmed:"✅ تأیید دیرهنگام — هشدار آزاد شد",late_declined:"🚫 رد دیرهنگام"};
+function renderGate(f){const g=f.crash_gate,on=g&&g.state!=="idle";$("gate").hidden=!on;if(!on)return;
+  $("gate-t").innerHTML=`<b>${GS[g.state]||esc(g.state)}</b>`+(g.state==="waiting"?` — ${g.seconds_left}s مانده`:"")+`<div class="mut">پیام‌های آزادشده: ${g.alerts_released}${g.answered_by?" · پاسخ از: "+(g.answered_by==="user"?"شما":"راننده‌ی شبیه‌سازی‌شده"):""}</div>`;
+  const can=!f.replayed&&(g.state==="waiting"||g.state==="timeout_skipped");
+  $("g-yes").disabled=!can;$("g-no").disabled=!can||g.state!=="waiting";$("gate-n").textContent=f.replayed?"بازپخش: پاسخ‌دهی غیرفعال است.":""}
+const answer=ok=>api("crash/answer",{confirmed:ok}).then(r=>{if(!r.ok)$("err").textContent=r.error});
+$("g-yes").onclick=()=>answer(true);$("g-no").onclick=()=>answer(false);
 function render(f){
   const o=f.obd,t=CFG.thresholds,col=o.coolant_temperature_c>=t.coolant_critical_c?"r":o.coolant_temperature_c>=t.coolant_warning_c?"y":"g";
   const vc=f.engine_on&&o.control_module_voltage_v<t.voltage_charging_min_v?"y":"g";
   $("v-speed").textContent=o.speed.toFixed(0);$("v-rpm").textContent=o.rpm.toFixed(0);$("v-cool").textContent=o.coolant_temperature_c.toFixed(1);$("v-volt").textContent=o.control_module_voltage_v.toFixed(2);
   setBar("speed",o.speed/180*100,"g");setBar("rpm",o.rpm/7000*100,"g");setBar("cool",(o.coolant_temperature_c-60)/70*100,col);setBar("volt",(o.control_module_voltage_v-10)/6*100,vc);
   ["speed","rpm","cool","volt"].forEach((k,i)=>pushChart(CH[k],f.t,[o.speed,o.rpm,o.coolant_temperature_c,o.control_module_voltage_v][i]));
-  Object.values(CH).forEach(c=>c.update("none"));
+  if(f.motion){$("cg-wrap").hidden=false;pushChart(CH.g,f.t,f.motion.peak_g)}
+  Object.values(CH).forEach(c=>c.update("none"));renderGate(f);
   const g=f.gps,dc={normal:"g",info:"g",warning:"y",critical:"r"}[f.danger_level];
   chip([["موتور",f.engine_on?"g":"r",f.engine_on?"روشن":"خاموش"],["GPS",g.status=="connected"?"g":g.status=="disconnected"?"y":"x",g.status=="connected"?"Connected":g.status=="disconnected"?"Disconnected":"N/A"],
    ["سطح خطر",dc,FA[f.danger_level]],["هشدار فعال",f.alerts.length?(f.alerts.some(a=>a.severity=="critical")?"r":"y"):"g",f.alerts.length],["جاده",f.road_type?"g":"x",f.road_type],["OBD",f.validation.errors.length?"r":"g",f.validation.errors.length?"خطا":"معتبر"]]);
@@ -153,13 +173,14 @@ function render(f){
     if(g.live){trail.addLatLng(ll);car.setStyle({fillColor:COL[dc]});if(!map.hasLayer(car))car.addTo(map);car.setLatLng(ll);if(!map.getBounds().contains(ll))map.panTo(ll)}
     else{car.setStyle({fillColor:COL.x});car.setLatLng(ll);if(!markers.lost)markers.lost=pin(ll,COL.x,"آخرین موقعیت معتبر (زنده نیست)").addTo(map)}
     if(g.live&&markers.lost){map.removeLayer(markers.lost);delete markers.lost}
+    if(f.events.some(e=>e.detector=="crash")&&!markers.crash)markers.crash=pin(ll,"#ff7b72","تصادف احتمالی (CrashDetector)").addTo(map);
     if(f.events.length&&!markers.fail)markers.fail=pin(ll,COL.r,"محل وقوع خرابی: "+f.events[0].event_type).addTo(map);
     if(f.t>5&&o.speed==0&&!markers.stop)markers.stop=pin(ll,COL.y,"خودرو متوقف شد").addTo(map);
     $("map-info").textContent=`${ll[0].toFixed(5)}, ${ll[1].toFixed(5)} — ${g.live?"زنده":"موقعیت قدیمی ("+g.age_s+"s)"}`}
   $("alerts").innerHTML=f.alerts.length?f.alerts.map(a=>`<div class="item ${a.severity}"><b>${esc(a.event_type)}</b> — ${FA[a.severity]}<small>${esc(a.message)} · ${a.source=="detector"?"Detector: "+esc(a.detector):"وضعیت شبیه‌ساز (نه Detector)"} · t=${mmss(a.first_t)}</small></div>`).join(""):'<span class="mut">هشداری نیست</span>';
   f.events.forEach(e=>{const d=$("events");if(d.querySelector(".mut"))d.innerHTML="";const code=e.details.code?` (${esc(e.details.code)}: ${esc(f.dtc_descriptions[e.details.code]||"")})`:"";
-    d.insertAdjacentHTML("afterbegin",`<div class="item ${e.severity}"><b>${esc(e.event_type)}</b>${code} — ${FA[e.severity]}<small>${esc(e.detector)} · t=${mmss(f.t)} · ${g.latitude!=null?g.latitude.toFixed(4)+", "+g.longitude.toFixed(4):"بدون GPS"}</small></div>`)});
-  f.emergency.forEach(r=>{const i=r.instruction,rep=r.report;$("emerg").innerHTML=`<b>${esc(i.title)}</b> <span class="mut">(فاز ${r.phase==="initial"?"فوری":"نهایی"} · خطر: ${esc(r.assessment.level)} · ${r.generation_ms}ms)</span><div>${esc(i.headline)}</div><ol>${i.steps.map(s=>`<li>${esc(s)}</li>`).join("")}</ol>${i.warnings.map(w=>`<div class="note">⚠️ ${esc(w)}</div>`).join("")}${rep&&rep.latitude!=null?`<div class="mut ltr">GPS: ${rep.latitude.toFixed(5)}, ${rep.longitude.toFixed(5)}</div>`:""}${r.assessment.reasons.map(x=>`<div class="mut">• ${esc(x)}</div>`).join("")}${i.status==="draft"?'<div class="note">راهنمای پیش‌نویس و تأییدنشده</div>':""}`});
+    d.insertAdjacentHTML("afterbegin",`<div class="item ${e.severity}"><b>${esc(e.event_type)}</b>${code} — ${FA[e.severity]}<small>${esc(e.detector)}${e.details.peak_g!=null?" · "+e.details.peak_g+" g · اطمینان "+esc(e.details.confidence):""} · t=${mmss(f.t)} · ${g.latitude!=null?g.latitude.toFixed(4)+", "+g.longitude.toFixed(4):"بدون GPS"}</small></div>`)});
+  f.emergency.forEach(r=>{const i=r.instruction,rep=r.report;$("emerg").innerHTML=`<b>${esc(i.title)}</b> <span class="mut">(فاز ${r.phase==="initial"?"فوری":"نهایی"} · خطر: ${esc(r.assessment.level)} · ${r.generation_ms}ms)</span><div>${esc(i.headline)}</div><ol>${i.steps.map(s=>`<li>${esc(s)}</li>`).join("")}</ol>${i.warnings.map(w=>`<div class="note">⚠️ ${esc(w)}</div>`).join("")}${rep&&rep.latitude!=null?`<div class="mut ltr">GPS: ${rep.latitude.toFixed(5)}, ${rep.longitude.toFixed(5)}</div>`:""}${r.assessment.reasons.map(x=>`<div class="mut">• ${esc(x)}</div>`).join("")}${i.id==="last_resort"?'<div class="note">⚠️ برای این رویداد دستورالعمل اختصاصی در پروژه تعریف نشده؛ فقط راهنمای عمومی (آخرین راه‌حل) نمایش داده شد.</div>':""}${i.status==="draft"?'<div class="note">راهنمای پیش‌نویس و تأییدنشده</div>':""}`});
 }
 function renderSummary(s){if(!s){$("summary").textContent="—";return}
   $("summary").innerHTML=`<div>${VERD[s.verdict]||s.verdict}</div><div>رویدادها: ${s.events} · هشدار اشتباه: ${s.false_alarms} · پاسخ اضطراری: ${s.emergency_responses}</div>`+
@@ -188,10 +209,11 @@ async function poll(){try{const s=await api("state?from="+frames.length);
 const act=(p,b)=>async()=>{const r=await api(p,b===undefined?{}:b());$("err").textContent=r.ok?"":r.error||"خطا"};
 $("b-pause").onclick=act("pause");$("b-resume").onclick=act("resume");$("b-stop").onclick=act("stop");$("b-reset").onclick=async()=>{await act("reset")();clearAll();previewRoute()};$("b-restart").onclick=async()=>{clearAll();await act("restart")()};
 $("b-start").onclick=async()=>{clearAll();const body={scenario:$("scn").value,vehicle_id:$("veh").value,road_source:$("road").value==="project"?"project":"sim"};
-  if($("evt").value!=="")body.event_time_s=+$("evt").value;const c=curRoute();if(c){body.start=c[0];body.destination=c[1];body.road_type=$("c-type").value}
+  if($("evt").value!=="")body.event_time_s=+$("evt").value;
+  if(!$("crash-opts").hidden){body.driver_response=$("drv").value;body.driver_delay_s=+$("drv-d").value;body.confirm_timeout_s=+$("to").value;body.on_timeout=$("ont").value}const c=curRoute();if(c){body.start=c[0];body.destination=c[1];body.road_type=$("c-type").value}
   const r=await api("start",body);$("err").textContent=r.ok?"":r.error||"خطا"};
 $("tg").onchange=async e=>{const r=await api("telegram",{enabled:e.target.checked});if(!r.ok){e.target.checked=false;$("err").textContent=r.error}};
-$("scn").onchange=()=>{const s=CFG.scenarios.find(x=>x.name==$("scn").value);$("scn-desc").textContent=s.description;$("scn-cov").textContent=s.coverage_note;$("evt").value=s.event_time_s;previewRoute()};
+$("scn").onchange=()=>{const s=CFG.scenarios.find(x=>x.name==$("scn").value);$("scn-desc").textContent=s.description;$("scn-cov").textContent=s.coverage_note;$("evt").value=s.event_time_s;$("crash-opts").hidden=!s.phone_sensors;if(s.phone_sensors)$("to").value=CFG.crash.default_confirm_timeout_s;previewRoute()};
 
 (async()=>{CFG=await (await fetch("/api/config")).json();
   $("scn").innerHTML=CFG.scenarios.map(s=>`<option value="${s.name}">${esc(s.title_fa)} — ${esc(s.title_en)}</option>`).join("");

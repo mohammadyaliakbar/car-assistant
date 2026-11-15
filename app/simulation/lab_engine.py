@@ -10,8 +10,11 @@
 با منبع `simulator_status` و بدون ادعای تشخیص Detector علامت‌گذاری می‌شود.
 """
 
+import logging
+import threading
 import time
 from datetime import datetime, timedelta, timezone
+from itertools import islice
 
 from app.data_models import VehicleRecord
 from app.data_validation import DataValidator
@@ -30,6 +33,9 @@ from app.emergency import (
     RiskAnalyzer,
     RoadsideEmergencyService,
 )
+from app.motion import CrashDetector, CrashMonitor, CrashResponder, MotionSimulator
+from app.motion.crash_response import DEFAULT_CONFIRM_TIMEOUT_S, DEFAULT_ON_TIMEOUT, TIMEOUT_POLICIES
+from app.simulation.options import DRIVER_ACTIONS
 from app.location.gps_client import GpsSource
 from app.location.models import GpsFix, RoadContext
 from app.simulation.routes import Route, get_route
@@ -43,7 +49,10 @@ from app.simulation.scenarios import (
 )
 from app.vehicle_profiles import get_vehicle_profile
 
+logger = logging.getLogger(__name__)
+
 SOURCE_NAME = "SIMULATOR"
+MOTION_RATE_HZ = 50                # نرخ حسگر گوشی؛ هر ثانیه‌ی مجازی ۵۰ نمونه
 DT_S = 1.0                      # هر گام = یک ثانیه‌ی مجازی (مثل POLL_INTERVAL_S پروژه)
 GPS_ACCURACY_M = 5.0
 SEVERITY_RANK = {"info": 0, "warning": 1, "critical": 2}
@@ -86,6 +95,26 @@ class SimulatedRoadAnalyzer:
         )
 
 
+class LabMotionSource:
+    """منبع حرکتی فشاری (push)؛ واسط MotionSource پروژه."""
+
+    def __init__(self):
+        self._samples: list = []
+
+    def push(self, samples) -> None:
+        self._samples.extend(samples)
+
+    def read_samples(self) -> list:
+        out, self._samples = self._samples, []
+        return out
+
+    def read_vehicle_signals(self) -> list:
+        return []
+
+    def close(self) -> None:
+        pass
+
+
 class RouteGpsSource(GpsSource):
     """GPS مسیرمحور. هنگام قطع، آخرین نمونه‌ی معتبر را با زمان قدیمی برمی‌گرداند."""
 
@@ -107,6 +136,11 @@ class SimulationEngine:
         seed: int = 1,
         start_time: datetime | None = None,
         road_analyzer=None,
+        driver_response: str = "none",
+        driver_delay_s: float = 5.0,
+        confirm_timeout_s: float = DEFAULT_CONFIRM_TIMEOUT_S,
+        on_timeout: str = DEFAULT_ON_TIMEOUT,
+        crash_alert_sink=None,
     ):
         self.spec: ScenarioSpec = get_scenario(scenario)
         self.route = route or get_route(self.spec.route)
@@ -117,6 +151,19 @@ class SimulationEngine:
         if self.duration_s <= 0 or self.event_time_s < 0:
             raise ValueError("زمان سناریو نامعتبر است.")
         self.seed = seed
+        if driver_response not in DRIVER_ACTIONS:
+            raise ValueError(f"driver_response باید یکی از {DRIVER_ACTIONS} باشد.")
+        if driver_delay_s < 0:
+            raise ValueError("driver_delay_s نباید منفی باشد.")
+        if not confirm_timeout_s > 0:
+            raise ValueError("confirm_timeout_s باید مثبت باشد.")
+        if on_timeout not in TIMEOUT_POLICIES:
+            raise ValueError(f"on_timeout باید یکی از {TIMEOUT_POLICIES} باشد.")
+        self.driver_response = driver_response
+        self.driver_delay_s = float(driver_delay_s)
+        self.confirm_timeout_s = float(confirm_timeout_s)
+        self.on_timeout = on_timeout
+        self._alert_sink = crash_alert_sink
         self.profile = get_vehicle_profile(vehicle_id)
         self.start_time = start_time or datetime.now(timezone.utc)
 
@@ -129,6 +176,7 @@ class SimulationEngine:
         self.roads = road_analyzer or SimulatedRoadAnalyzer(lambda: self._current_road)
 
         self._responses: list = []
+        self._new_responses: list[dict] = []
         self.emergency = RoadsideEmergencyService(
             gps=self.gps,
             road_analyzer=self.roads,
@@ -141,6 +189,36 @@ class SimulationEngine:
             submit=lambda fn: fn(),         # همزمان؛ نتیجه‌ی تکرارپذیر
             clock=self.now,
         )
+
+        # حسگر گوشی و تشخیص تصادف (فقط سناریوهای دارای motion_scenario)
+        self.responder: CrashResponder | None = None
+        self.crash_monitor: CrashMonitor | None = None
+        self.alerts_released: list[dict] = []
+        self._gate_lock = threading.Lock()
+        self._gate: dict = {"state": "idle"}
+        self._driver_answer_t: float | None = None
+        self._mail_import_failed = False
+        if self.spec.phone_sensors:
+            self.motion_source = LabMotionSource()
+            self._motion_iter = MotionSimulator(
+                rate_hz=MOTION_RATE_HZ,
+                duration_s=self.duration_s + 1,
+                event_time_s=self.event_time_s,
+                seed=seed,
+                start=self.start_time,
+            ).scenario(self.spec.motion_scenario)
+            self.crash_detector = CrashDetector(self.profile.vehicle_id)
+            self.responder = CrashResponder(
+                emergency_handler=lambda event: self._run_emergency(event, crash=True),
+                send_alert=self._release_alert,
+                prompt=self._on_prompt,
+                timeout_s=self.confirm_timeout_s,
+                on_timeout=self.on_timeout,
+                clock=self.now,
+            )
+            self.crash_monitor = CrashMonitor(
+                self.motion_source, self.crash_detector, self.responder, clock=self.now
+            )
 
         self.t = 0.0
         self.distance_m = 0.0
@@ -182,7 +260,6 @@ class SimulationEngine:
         report = self.validator.validate(raw)
 
         new_events: list[DetectionEvent] = []
-        new_responses: list[dict] = []
         if report.errors or report.data is None:
             self.validation_errors += 1
         else:
@@ -195,16 +272,20 @@ class SimulationEngine:
             new_events = self.detectors.process(record)
             for event in new_events:
                 self._register_event(event, t)
-                started = time.perf_counter()
-                before = len(self._responses)
-                self.emergency.handle(event)
-                elapsed_ms = (time.perf_counter() - started) * 1000
-                for resp in self._responses[before:]:
-                    d = resp.model_dump(mode="json")
-                    d["generation_ms"] = round(elapsed_ms, 3)
-                    d["sim_t"] = t
-                    new_responses.append(d)
-            self.emergency_log.extend(new_responses)
+                self._run_emergency(event)
+            if self.crash_monitor is not None:
+                self.crash_monitor.update_vehicle(ts, raw["speed"], raw["rpm"])
+
+        motion = None
+        if self.crash_monitor is not None:
+            motion = self._feed_motion()
+            for event in self.crash_monitor.step():       # CrashDetector واقعی
+                self._register_event(event, t)
+                new_events.append(event)
+            self._advance_gate(t)
+
+        new_responses, self._new_responses = self._new_responses, []
+        self.emergency_log.extend(new_responses)
 
         status_alert = self._gps_status_alert(gps_info, t, ts)
 
@@ -227,6 +308,8 @@ class SimulationEngine:
             "alerts": self.active_alerts(),
             "danger_level": self.danger_level(),
             "dtc_descriptions": {c: DTC_DESCRIPTIONS.get(c, "Unknown code") for c in state.dtc},
+            "motion": motion,
+            "crash_gate": self.gate_snapshot(t) if self.responder is not None else None,
         }
         self.frames.append(frame)
         self.t += DT_S
@@ -236,6 +319,105 @@ class SimulationEngine:
         while not self.finished:
             self.step()
         return self.frames
+
+    # ------------------------------------------------------------ اضطراری و تصادف
+
+    def _run_emergency(self, event: DetectionEvent, crash: bool = False) -> None:
+        started = time.perf_counter()
+        before = len(self._responses)
+        self.emergency.handle(event, crash_suspected=crash)
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
+        for resp in self._responses[before:]:
+            d = resp.model_dump(mode="json")
+            d["generation_ms"] = elapsed_ms
+            d["sim_t"] = self.t
+            self._new_responses.append(d)
+            if self.responder is not None and resp.event_type == CrashDetector.EVENT_TYPE:
+                self._hold_crash_message(resp)
+
+    def _hold_crash_message(self, resp) -> None:
+        """پاسخ اضطراریِ تصادف هم مثل main.py پشت دروازه‌ی تأیید راننده نگه داشته می‌شود."""
+        try:
+            from main import emergency_to_event      # همان تبدیل برنامه‌ی اصلی
+            self.responder.submit_alert(emergency_to_event(resp, self.profile.vehicle_id))
+        except Exception:
+            if not self._mail_import_failed:
+                self._mail_import_failed = True
+                logger.exception("Could not queue the crash emergency message.")
+
+    def _feed_motion(self) -> dict | None:
+        samples = [step.sample for step in islice(self._motion_iter, MOTION_RATE_HZ)]
+        if not samples:
+            return None
+        self.motion_source.push(samples)
+        gyros = [x.gyro_magnitude_rad_s for x in samples if x.gyro_magnitude_rad_s is not None]
+        g = [x.accel_magnitude_g for x in samples]
+        return {
+            "samples": len(samples),
+            "peak_g": round(max(g), 2),
+            "mean_g": round(sum(g) / len(g), 2),
+            "peak_gyro_rad_s": round(max(gyros), 2) if gyros else None,
+        }
+
+    def _on_prompt(self, request) -> None:
+        with self._gate_lock:
+            self._gate = {
+                "state": "waiting", "request_id": request.id,
+                "created_t": self.t, "expires_t": self.t + self.confirm_timeout_s,
+                "answered_t": None, "answered_by": None,
+            }
+        if self.driver_response != "none":
+            self._driver_answer_t = self.t + self.driver_delay_s
+
+    def answer_crash(self, confirmed: bool, by: str = "user") -> bool:
+        """پاسخ راننده؛ از هر ریسمانی امن است. False یعنی درخواستی نبود."""
+        if self.responder is None or not self.responder.answer(confirmed):
+            return False
+        with self._gate_lock:
+            late = self._gate.get("state", "").startswith("timeout")
+            self._gate.update(
+                state=("late_" if late else "") + ("confirmed" if confirmed else "declined"),
+                answered_t=self.t, answered_by=by,
+            )
+        return True
+
+    def _release_alert(self, event: DetectionEvent) -> None:
+        """پیام پس از تأیید راننده (یا تایم‌اوت با سیاست send) آزاد می‌شود."""
+        self.alerts_released.append({
+            "t": self.t, "event_type": event.event_type,
+            "severity": event.severity.value, "message": event.message,
+        })
+        if self._alert_sink is not None:
+            try:
+                self._alert_sink(event)
+            except Exception:
+                logger.exception("Crash alert sink failed.")
+
+    def _advance_gate(self, t: float) -> None:
+        if self._driver_answer_t is not None and t >= self._driver_answer_t:
+            self._driver_answer_t = None
+            self.answer_crash(self.driver_response == "confirm", by="simulated_driver")
+        with self._gate_lock:
+            waiting = self._gate.get("state") == "waiting"
+        if waiting and not self.responder.pending_requests:     # تایم‌اوت شد
+            with self._gate_lock:
+                if self._gate.get("state") == "waiting":
+                    self._gate["state"] = (
+                        "timeout_sent" if self.on_timeout == "send" else "timeout_skipped"
+                    )
+
+    def gate_snapshot(self, t: float | None = None) -> dict:
+        now_t = self.t if t is None else t
+        with self._gate_lock:
+            g = dict(self._gate)
+        g["seconds_left"] = (
+            max(0.0, round(g["expires_t"] - now_t, 1)) if g["state"] == "waiting" else None
+        )
+        g["alerts_released"] = len(self.alerts_released)
+        g["on_timeout"] = self.on_timeout
+        g["timeout_s"] = self.confirm_timeout_s
+        g["driver_response"] = self.driver_response
+        return g
 
     # ------------------------------------------------------------ GPS
 
@@ -361,7 +543,15 @@ class SimulationEngine:
             verdict = "status_only_no_detector"
         else:
             verdict = "false_alarm" if self._unexpected else "no_events_as_expected"
+        crash = None
+        if self.responder is not None:
+            gate = self.gate_snapshot()
+            crash = {
+                "gate_state": gate["state"], "alerts_released": gate["alerts_released"],
+                "driver_response": self.driver_response, "on_timeout": self.on_timeout,
+            }
         return {
+            "crash": crash,
             "verdict": verdict,
             "scenario": self.spec.name,
             "coverage": self.spec.coverage,

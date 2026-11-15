@@ -104,3 +104,45 @@ def test_history_replay_and_report_page(page):
     pg.goto(pg.locator("a:text('بازپخش')").first.get_attribute("href").replace("/?", base + "/?"))
     pg.wait_for_function("!document.getElementById('rb').hidden", timeout=10000)
     assert errors == []
+
+
+def test_crash_scenario_driver_gate_in_browser(page):
+    pg, errors = page
+    pg.select_option("#scn", "crash_detection")
+    assert pg.is_visible("#crash-opts")                       # گزینه‌های راننده فقط برای تصادف
+    pg.fill("#to", "90")
+    pg.click("#speeds button[data-x='5']")
+    pg.click("#b-start")
+    pg.wait_for_function("!document.getElementById('gate').hidden", timeout=40000)
+    pg.wait_for_function("document.getElementById('gate-t').innerText.includes('در انتظار')",
+                         timeout=20000)
+    assert pg.is_enabled("#g-yes") and pg.is_visible("#cg-wrap")   # نمودار شتاب گوشی
+    assert "crash_suspected" in pg.inner_text("#events")
+    assert "Detector: crash" in pg.inner_text("#alerts")
+    pg.screenshot(path="/tmp/dash_crash.png", full_page=True)
+    pg.click("#g-yes")                                        # تأیید واقعی راننده با کلیک
+    pg.wait_for_function("document.getElementById('gate-t').innerText.includes('تأیید کرد')",
+                         timeout=10000)
+    assert "شما" in pg.inner_text("#gate-t")
+    assert pg.is_disabled("#g-yes")
+    pg.wait_for_function("document.getElementById('summary').innerText.includes('تشخیص واقعی')",
+                         timeout=40000)
+    assert errors == []
+
+
+def test_crash_decline_via_button_and_other_scenarios_hide_crash_ui(page):
+    pg, errors = page
+    pg.select_option("#scn", "crash_detection")
+    pg.click("#speeds button[data-x='10']")
+    pg.click("#b-start")
+    pg.wait_for_function("document.getElementById('gate-t').innerText.includes('در انتظار')",
+                         timeout=40000)
+    pg.click("#g-no")
+    pg.wait_for_function("document.getElementById('gate-t').innerText.includes('رد کرد')",
+                         timeout=10000)
+    pg.click("#b-reset")
+    pg.wait_for_function("document.getElementById('t-state').innerText==='idle'")
+    assert pg.is_hidden("#gate") and pg.is_hidden("#cg-wrap")
+    pg.select_option("#scn", "normal_driving")
+    assert pg.is_hidden("#crash-opts")
+    assert errors == []

@@ -21,6 +21,9 @@ from app.simulation.lab_controller import SPEEDS, SimulationController
 from app.simulation.lab_engine import SimulationEngine, build_detector_engine
 from app.simulation.lab_history import HISTORY_DIR, HistoryStore, ReplayEngine
 from app.simulation.lab_report import build_report, runs_csv, scenarios_csv
+from app.simulation.options import DRIVER_ACTIONS
+from app.motion import CrashConfig
+from app.motion.crash_response import DEFAULT_CONFIRM_TIMEOUT_S, DEFAULT_ON_TIMEOUT, TIMEOUT_POLICIES
 from app.simulation.routes import ROUTES, ROAD_TYPES, Route
 from app.simulation.scenarios import LAB_SCENARIOS
 
@@ -48,7 +51,23 @@ class LabApp:
     def _make_engine(self, scenario, **p):
         if scenario.startswith("replay:"):
             return ReplayEngine(scenario, self.store)
-        return SimulationEngine(scenario, **p)
+        return SimulationEngine(scenario, crash_alert_sink=self._send_crash_alert, **p)
+
+    def _send_crash_alert(self, event) -> None:
+        """پیام‌های تصادف فقط بعد از تأیید راننده به اینجا می‌رسند (CrashResponder)."""
+        if not self.telegram_enabled or self._notifier is None:
+            return
+        event = event.model_copy(update={"message": "[SIMULATION] " + event.message})
+        self._notifier.notify_event(event)
+
+    def answer_crash(self, confirmed: bool) -> dict:
+        engine = self.controller.engine
+        if (engine is None or getattr(engine, "is_replay", False)
+                or getattr(engine, "responder", None) is None):
+            raise ValueError("پرسش تأیید راننده فعال نیست.")
+        if not engine.answer_crash(confirmed):
+            raise ValueError("درخواست تأییدی در انتظار پاسخ نیست.")
+        return {"gate": engine.gate_snapshot()}
 
     def _on_run_end(self, engine, status, started_at, ended_at) -> None:
         if getattr(engine, "is_replay", False):
@@ -68,6 +87,13 @@ class LabApp:
             params["event_time_s"] = float(body["event_time_s"])
         if body.get("duration_s") not in (None, ""):
             params["duration_s"] = float(body["duration_s"])
+        if body.get("driver_response"):
+            params["driver_response"] = str(body["driver_response"])
+        for key in ("driver_delay_s", "confirm_timeout_s"):
+            if body.get(key) not in (None, ""):
+                params[key] = float(body[key])
+        if body.get("on_timeout"):
+            params["on_timeout"] = str(body["on_timeout"])
         if body.get("vehicle_id"):
             params["vehicle_id"] = str(body["vehicle_id"])
         if body.get("start") and body.get("destination"):
@@ -98,6 +124,8 @@ class LabApp:
         if not self.telegram_enabled or self._notifier is None or frame.get("replayed"):
             return                                   # بازپخش هرگز پیام واقعی نمی‌فرستد
         for raw in frame["events"]:
+            if raw["detector"] == "crash":
+                continue                             # فقط از دروازه‌ی تأیید راننده می‌گذرد
             if raw["severity"] in ("warning", "critical"):
                 event = DetectionEvent.model_validate(raw)
                 event = event.model_copy(update={"message": "[SIMULATION] " + event.message})
@@ -116,6 +144,7 @@ class LabApp:
                 {"name": s.name, "title_fa": s.title_fa, "title_en": s.title_en,
                  "description": s.description, "route": s.route, "duration_s": s.duration_s,
                  "event_time_s": s.event_time_s, "coverage": s.coverage,
+                 "phone_sensors": s.phone_sensors,
                  "coverage_note": s.coverage_note}
                 for s in LAB_SCENARIOS.values()
             ],
@@ -125,6 +154,14 @@ class LabApp:
             "thresholds": {
                 "coolant_warning_c": cool.warning_c, "coolant_critical_c": cool.critical_c,
                 "voltage_charging_min_v": volt.charging_min_v,
+            },
+            "crash": {
+                "impact_g": CrashConfig().impact_g,
+                "confirm_window_s": CrashConfig().confirm_window_s,
+                "default_confirm_timeout_s": DEFAULT_CONFIRM_TIMEOUT_S,
+                "default_on_timeout": DEFAULT_ON_TIMEOUT,
+                "on_timeout_policies": list(TIMEOUT_POLICIES),
+                "driver_actions": list(DRIVER_ACTIONS),
             },
             "project_road_available": self.roads_db.is_file(),
             "telegram_configurable": self._notifier_factory is not None,
@@ -141,6 +178,7 @@ def make_handler(app: LabApp):
         "/api/start": app.start,
         "/api/speed": lambda b: app.controller.set_speed(float(b["multiplier"])),
         "/api/telegram": lambda b: app.set_telegram(bool(b.get("enabled"))),
+        "/api/crash/answer": lambda b: app.answer_crash(bool(b["confirmed"])),
         "/api/history/delete": lambda b: app.store.delete_run(str(b.get("run_id", ""))),
     }
 

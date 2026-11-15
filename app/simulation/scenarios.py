@@ -25,6 +25,8 @@ TARGET_SPEED = {"urban": 42.0, "highway": 98.0, "rural": 68.0}
 ACCEL_KMH_PER_S = 3.0
 BRAKE_KMH_PER_S = 5.0
 COAST_DECEL_KMH_PER_S = 1.6   # خودرو بعد از خاموشی موتور
+CRASH_STOP_S = 1.5            # مدت رسیدن سرعت به صفر بعد از ضربه (هم‌خوان با MotionSimulator)
+CRASH_ENGINE_CUT_S = 0.4      # خاموشی موتور بعد از ضربه
 
 
 @dataclass(frozen=True)
@@ -46,6 +48,7 @@ class ModelConfig:
     dtc_events: tuple[tuple[float, str], ...] = ()
     gps_loss: tuple[float, float] | None = None   # (شروع، پایان)
     road_dependent_speed: bool = False
+    crash_at: float | None = None   # لحظه‌ی ضربه؛ نمونه‌ی OBD همان ثانیه هنوز «پیش از ضربه» است
 
 
 @dataclass(frozen=True)
@@ -71,6 +74,7 @@ class DrivingModel:
         self.speed = 0.0
         self._stall_rpm: float | None = None
         self._coolant_at_heat: float | None = None
+        self._crash_v0: float | None = None
 
     def _noise(self, channel: str, t: float, amp: float) -> float:
         return random.Random(f"{self.seed}:{channel}:{int(t)}").uniform(-amp, amp)
@@ -81,8 +85,14 @@ class DrivingModel:
     def advance(self, t: float, road_type: str) -> VState:
         c = self.cfg
         stalled = c.stall_at is not None and t >= c.stall_at
+        crashed = c.crash_at is not None and t > c.crash_at
 
-        if stalled:
+        if crashed:
+            if self._crash_v0 is None:
+                self._crash_v0 = self.speed
+            self.speed = max(0.0, self._crash_v0 * (1.0 - (t - c.crash_at) / CRASH_STOP_S))
+            rpm = 0.0 if t > c.crash_at + CRASH_ENGINE_CUT_S else 800.0 + 22.0 * self.speed
+        elif stalled:
             self.speed = max(0.0, self.speed - COAST_DECEL_KMH_PER_S)
             if self._stall_rpm is None:
                 self._stall_rpm = 2600.0
@@ -150,14 +160,19 @@ class ScenarioSpec:
     coverage: str            # detector | negative | status_only
     coverage_note: str
     _build: object = field(repr=False, default=None)
+    motion_scenario: str | None = None   # سناریوی MotionSimulator؛ None یعنی بدون حسگر گوشی
+
+    @property
+    def phone_sensors(self) -> bool:
+        return self.motion_scenario is not None
 
     def build(self, event_time_s: float | None = None):
         t0 = self.event_time_s if event_time_s is None else event_time_s
         return self._build(t0)
 
 
-def _spec(name, fa, en, desc, route, duration, t0, coverage, note, build):
-    return ScenarioSpec(name, fa, en, desc, route, duration, t0, coverage, note, build)
+def _spec(name, fa, en, desc, route, duration, t0, coverage, note, build, motion=None):
+    return ScenarioSpec(name, fa, en, desc, route, duration, t0, coverage, note, build, motion)
 
 
 def _normal(t0):
@@ -211,6 +226,16 @@ def _multi(t0):
     )
 
 
+def _crash(t0):
+    return (
+        ModelConfig(crash_at=t0),
+        (
+            ExpectedDetection("crash", "crash_suspected", t0),
+            ExpectedDetection("stoppage", "engine_stalled_while_moving", t0),
+        ),
+    )
+
+
 def _road(t0):
     return ModelConfig(road_dependent_speed=True), ()
 
@@ -251,6 +276,12 @@ LAB_SCENARIOS: dict[str, ScenarioSpec] = {
               "شهری ← بزرگراه ← جاده‌ی خارج شهر با سرعت متناسب با هر نوع جاده.",
               "mixed_urban_highway_rural", 480, 0, "negative",
               "بدون خرابی؛ فقط نوع جاده و سرعت تغییر می‌کند.", _road),
+        _spec("crash_detection", "تشخیص تصادف", "Crash Detection",
+              "ضربه‌ی شدید، افت ناگهانی سرعت به صفر و خاموشی موتور؛ حسگر گوشی و OBD "
+              "هم‌زمان؛ ارسال هشدار فقط بعد از تأیید راننده.",
+              "tehran_karaj_highway", 150, 45, "detector",
+              "CrashDetector (حسگر گوشی + سرعت/RPM) و StoppageDetector (OBD)؛ "
+              "پیام تلگرام تا تأیید راننده نگه داشته می‌شود.", _crash, "crash"),
     )
 }
 

@@ -89,6 +89,7 @@ def test_every_scenario_has_expected_verdict():
         "gps_signal_loss": "status_only_no_detector",
         "multiple_failures": "detected_by_detector",
         "road_changes": "no_events_as_expected",
+        "crash_detection": "detected_by_detector",
     }
     assert set(expected) == set(LAB_SCENARIOS)
     for name, verdict in expected.items():

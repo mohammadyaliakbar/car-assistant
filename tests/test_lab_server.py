@@ -60,7 +60,7 @@ def wait_for(cond, timeout=8.0):
 def test_config_lists_scenarios_and_real_thresholds(server):
     base, *_ = server
     status, cfg = jcall(base, "/api/config")
-    assert status == 200 and len(cfg["scenarios"]) == 8
+    assert status == 200 and len(cfg["scenarios"]) == 9
     assert cfg["thresholds"] == {"coolant_warning_c": 105, "coolant_critical_c": 115,
                                  "voltage_charging_min_v": 13.0}
     assert cfg["speeds"] == [1, 2, 5, 10]
