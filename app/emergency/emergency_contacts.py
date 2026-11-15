@@ -3,6 +3,8 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+from app.time_utils import format_local
+
 from app.detectors.event_detector import DetectionEvent
 from app.emergency.models import (
     EmergencyContact,
@@ -115,7 +117,7 @@ def format_message(report: EmergencyReport) -> str:
         "رویداد: " + EVENT_LABELS.get(report.event_type, report.event_type)
     )
     lines.append(f"خودرو: {report.vehicle}")
-    lines.append(f"زمان توقف: {report.stopped_at.isoformat()}")
+    lines.append(f"زمان توقف: {format_local(report.stopped_at)}")
 
     if report.latitude is not None and report.longitude is not None:
         position = f"مختصات: {report.latitude:.6f}, {report.longitude:.6f}"
@@ -125,7 +127,7 @@ def format_message(report: EmergencyReport) -> str:
             position += " (دقت نامشخص)"
         lines.append(position)
         if report.gps_timestamp is not None:
-            lines.append(f"زمان ثبت مختصات: {report.gps_timestamp.isoformat()}")
+            lines.append(f"زمان ثبت مختصات: {format_local(report.gps_timestamp)}")
     else:
         lines.append("مختصات: نامشخص")
 

@@ -8,6 +8,8 @@ from html import escape
 
 import httpx
 
+from app.time_utils import format_local
+
 logger = logging.getLogger(__name__)
 
 # علامت پایان برای thread پس‌زمینه
@@ -240,7 +242,7 @@ class TelegramNotifier:
             f"<b>خودرو:</b> {escape(str(event.vehicle_id))}\n"
             f"<b>نوع رویداد:</b> {escape(str(event.event_type))}\n"
             f"<b>پیام:</b> {escape(str(event.message))}\n"
-            f"<b>زمان:</b> {escape(event.timestamp.isoformat())}"
+            f"<b>زمان:</b> {escape(format_local(event.timestamp))}"
         )
 
         max_attempts = (
