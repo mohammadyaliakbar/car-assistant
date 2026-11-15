@@ -10,6 +10,7 @@
 با منبع `simulator_status` و بدون ادعای تشخیص Detector علامت‌گذاری می‌شود.
 """
 
+import dataclasses
 import logging
 import threading
 import time
@@ -168,6 +169,8 @@ class SimulationEngine:
         self.start_time = start_time or datetime.now(timezone.utc)
 
         config, self.expected = self.spec.build(self.event_time_s)
+        if route is not None:       # مسیر دلخواه: سرعت از نوع هر قطعه‌ی جاده می‌آید
+            config = dataclasses.replace(config, road_dependent_speed=True)
         self.model = DrivingModel(config, seed)
         self.validator = DataValidator(self.profile)
         self.detectors = build_detector_engine()

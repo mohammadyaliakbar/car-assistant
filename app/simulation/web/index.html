@@ -71,6 +71,8 @@ button.p{background:#1f6feb;border-color:#1f6feb}button.on{background:#1f6feb33;
     <label>مقصد (lat, lon)</label><input id="c-dest" class="ltr" placeholder="35.8000, 50.9950">
     <label>نوع جاده</label><select id="c-type"><option value="highway">بزرگراه</option><option value="urban">شهری</option><option value="rural">خارج شهر</option></select>
     <div class="row"><button id="c-clear">پاک‌کردن مسیر دلخواه</button></div>
+    <div class="mut" style="margin-top:6px">روی خود جاده کلیک کنید؛ نزدیک‌ترین نقطه‌ی جاده انتخاب می‌شود (حداکثر ۴۰۰ متر).</div>
+    <div class="note" id="route-st"></div>
   </div>
   <div class="card"><h2>تاریخچه‌ی سناریوها</h2>
     <select id="hist"></select>
@@ -92,7 +94,10 @@ button.p{background:#1f6feb;border-color:#1f6feb}button.on{background:#1f6feb33;
     <div class="gauge"><small>دمای خنک‌کننده (°C)</small><b id="v-cool">—</b><div class="bar"><i id="r-cool"></i></div></div>
     <div class="gauge"><small>ولتاژ (V)</small><b id="v-volt">—</b><div class="bar"><i id="r-volt"></i></div></div>
   </div></div>
-  <div class="card"><h2>نقشه‌ی زنده <span class="mut" id="map-info"></span></h2><div id="map"></div></div>
+  <div class="card"><h2>نقشه‌ی زنده <span class="mut" id="map-info"></span></h2>
+    <div class="row" style="margin:0 0 8px;align-items:center"><select id="basemap" style="max-width:210px"></select>
+      <label style="display:flex;gap:6px;align-items:center;margin:0;flex:0 0 auto"><input id="roads-on" type="checkbox" style="width:auto" checked> جاده‌های پروژه (آفلاین)</label></div>
+    <div id="map"></div><div class="mut" style="margin-top:6px"><span id="tile-st"></span> · <span id="road-st"></span></div></div>
   <div class="card"><h2>نمودارهای زنده</h2><div class="charts">
     <div><canvas id="c-speed"></canvas></div><div><canvas id="c-rpm"></canvas></div>
     <div><canvas id="c-cool"></canvas></div><div><canvas id="c-volt"></canvas></div>
@@ -122,13 +127,47 @@ const parseLL=s=>{const m=String(s).split(/[ ,;]+/).filter(Boolean).map(Number);
 
 // ---- نقشه
 const map=L.map("map",{zoomControl:true}).setView([35.70,51.30],11);
-L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",{maxZoom:18,attribution:"© OpenStreetMap, © CARTO"}).addTo(map);
+const BASES=[
+ {name:"OpenStreetMap",url:"https://tile.openstreetmap.org/{z}/{x}/{y}.png",o:{maxZoom:19,attribution:"© OpenStreetMap contributors"}},
+ {name:"CARTO تیره",url:"https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",o:{maxZoom:18,attribution:"© OpenStreetMap, © CARTO"}},
+ {name:"CARTO روشن",url:"https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",o:{maxZoom:18,attribution:"© OpenStreetMap, © CARTO"}},
+ {name:"Esri خیابان",url:"https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",o:{maxZoom:19,attribution:"Tiles © Esri"}}];
+let base=null,tOK=0,tErr=0,autoBase=true,baseIdx=0,baseTok=0;
+function tileStat(){const b=BASES[baseIdx];$("tile-st").textContent=base?`پس‌زمینه: ${b.name} — ${tOK} کاشی بارگذاری شد${tErr?"، "+tErr+" خطا":""}${autoBase?" (خودکار)":""}`:"پس‌زمینه: ندارد — فقط جاده‌های پروژه"}
+function setBase(i,auto){if(base)map.removeLayer(base);base=null;autoBase=auto;baseIdx=i;tOK=tErr=0;const tok=++baseTok;
+  if(i>=0&&i<BASES.length){const b=BASES[i];base=L.tileLayer(b.url,b.o);
+    base.on("tileload",()=>{if(tok==baseTok){tOK++;tileStat()}});
+    base.on("tileerror",()=>{if(tok!=baseTok)return;tErr++;tileStat();if(autoBase&&tOK==0&&tErr>=4)nextBase()});
+    base.addTo(map);setTimeout(()=>{if(tok==baseTok&&autoBase&&tOK==0)nextBase()},7000)}
+  tileStat()}
+function nextBase(){setBase(baseIdx+1<BASES.length?baseIdx+1:-1,true)}
+$("basemap").innerHTML='<option value="auto">پس‌زمینه: خودکار</option>'+BASES.map((b,i)=>`<option value="${i}">${b.name}</option>`).join("")+'<option value="none">بدون پس‌زمینه</option>';
+$("basemap").onchange=e=>{const v=e.target.value;setBase(v=="auto"?0:v=="none"?-1:+v,v=="auto")};
+setBase(0,true);
+
+// ---- جاده‌های دیتابیس پروژه (آفلاین)
+map.createPane("roads");map.getPane("roads").style.zIndex=350;map.getPane("roads").style.pointerEvents="none";
+const roadsLayer=L.layerGroup().addTo(map),roadsCanvas=L.canvas({pane:"roads",padding:.3});let roadReq=0,roadTimer=null;
+const RC=t=>/^(motorway|trunk)/.test(t)?["#f0883e",4]:/^(primary|secondary)/.test(t)?["#d29922",3]:/^(tertiary|unclassified)/.test(t)?["#9aa4b2",2]:["#566170",1.4];
+async function loadRoads(){const tok=++roadReq;
+  if(!CFG||!CFG.roads_available||!$("roads-on").checked){roadsLayer.clearLayers();$("road-st").textContent=CFG&&!CFG.roads_available?"جاده‌های آفلاین: دیتابیس نیست":"";return}
+  const z=map.getZoom();if(z<12){roadsLayer.clearLayers();$("road-st").textContent="برای دیدن جاده‌ها بزرگ‌نمایی کنید";return}
+  const b=map.getBounds();try{const r=await (await fetch(`/api/roads?south=${b.getSouth()}&west=${b.getWest()}&north=${b.getNorth()}&east=${b.getEast()}&zoom=${z}`)).json();
+    if(tok!=roadReq)return;roadsLayer.clearLayers();(r.features||[]).forEach(f=>{const[c,w]=RC(f.t);L.polyline(f.p,{color:c,weight:w,opacity:.65,interactive:false,renderer:roadsCanvas}).addTo(roadsLayer)});
+    $("road-st").textContent=r.error?r.error:`${(r.features||[]).length} جاده${r.truncated?" (بخشی نمایش داده شد؛ بزرگ‌نمایی کنید)":""}${z<14?" — خیابان‌های فرعی از بزرگ‌نمایی ۱۴":""}`}catch(e){$("road-st").textContent="خطا در خواندن جاده‌ها"}}
+map.on("moveend",()=>{clearTimeout(roadTimer);roadTimer=setTimeout(loadRoads,300)});$("roads-on").onchange=loadRoads;
 const routeLine=L.polyline([],{color:"#58a6ff",weight:4,opacity:.45}).addTo(map), trail=L.polyline([],{color:"#3fb950",weight:4}).addTo(map);
 const car=L.circleMarker([0,0],{radius:9,color:"#fff",weight:2,fillColor:COL.g,fillOpacity:1});
 const pin=(ll,c,t)=>L.circleMarker(ll,{radius:8,color:"#fff",weight:2,fillColor:c,fillOpacity:1}).bindTooltip(t,{permanent:false});
 function showRoute(pts){routeLine.setLatLngs(pts);if(pts.length)map.fitBounds(routeLine.getBounds(),{padding:[30,30]})}
 function curRoute(){const s=parseLL($("c-start").value),d=parseLL($("c-dest").value);return s&&d?[s,d]:null}
-function previewRoute(){const c=curRoute();if(c)return showRoute(c);const s=CFG&&CFG.scenarios.find(x=>x.name==$("scn").value);if(s)showRoute(CFG.routes[s.route].points)}
+let prevTok=0;
+async function previewRoute(){const tok=++prevTok,c=curRoute();$("route-st").textContent="";
+  if(c){showRoute(c);$("route-st").textContent="در حال یافتن مسیر روی جاده‌ها…";
+    try{const r=await (await fetch(`/api/route?start=${c[0]}&dest=${c[1]}&road_type=${$("c-type").value}`)).json();if(tok!=prevTok)return;
+      if(r.error){$("route-st").textContent=r.error;return}
+      showRoute(r.points);$("route-st").textContent=r.method=="roads"?`✅ مسیر روی جاده‌ها: ${(r.length_m/1000).toFixed(1)} کیلومتر`:"⚠️ "+r.warning}catch(e){$("route-st").textContent="خطا در مسیریابی"}return}
+  const s=CFG&&CFG.scenarios.find(x=>x.name==$("scn").value);if(s)showRoute(CFG.routes[s.route].points)}
 map.on("click",e=>{if(!pick)return;$(pick==="s"?"c-start":"c-dest").value=e.latlng.lat.toFixed(5)+", "+e.latlng.lng.toFixed(5);pick=null;document.querySelectorAll("[id^=p-]").forEach(b=>b.classList.remove("on"));previewRoute()});
 ["start","dest"].forEach(k=>$("p-"+k).onclick=()=>{pick=k[0];$("p-"+k).classList.add("on")});
 $("c-clear").onclick=()=>{$("c-start").value=$("c-dest").value="";previewRoute()};
@@ -211,7 +250,7 @@ $("b-pause").onclick=act("pause");$("b-resume").onclick=act("resume");$("b-stop"
 $("b-start").onclick=async()=>{clearAll();const body={scenario:$("scn").value,vehicle_id:$("veh").value,road_source:$("road").value==="project"?"project":"sim"};
   if($("evt").value!=="")body.event_time_s=+$("evt").value;
   if(!$("crash-opts").hidden){body.driver_response=$("drv").value;body.driver_delay_s=+$("drv-d").value;body.confirm_timeout_s=+$("to").value;body.on_timeout=$("ont").value}const c=curRoute();if(c){body.start=c[0];body.destination=c[1];body.road_type=$("c-type").value}
-  const r=await api("start",body);$("err").textContent=r.ok?"":r.error||"خطا"};
+  const r=await api("start",body);$("err").textContent=r.ok?"":r.error||"خطا";if(r.ok&&r.warning)$("route-st").textContent="⚠️ "+r.warning};
 $("tg").onchange=async e=>{const r=await api("telegram",{enabled:e.target.checked});if(!r.ok){e.target.checked=false;$("err").textContent=r.error}};
 $("scn").onchange=()=>{const s=CFG.scenarios.find(x=>x.name==$("scn").value);$("scn-desc").textContent=s.description;$("scn-cov").textContent=s.coverage_note;$("evt").value=s.event_time_s;$("crash-opts").hidden=!s.phone_sensors;if(s.phone_sensors)$("to").value=CFG.crash.default_confirm_timeout_s;previewRoute()};
 
@@ -220,7 +259,7 @@ $("scn").onchange=()=>{const s=CFG.scenarios.find(x=>x.name==$("scn").value);$("
   $("speeds").innerHTML=CFG.speeds.map(x=>`<button data-x="${x}">${x}x</button>`).join("");
   document.querySelectorAll("#speeds button").forEach(b=>b.onclick=()=>api("speed",{multiplier:+b.dataset.x}));
   $("road-proj").disabled=!CFG.project_road_available;$("tg").disabled=!CFG.telegram_configurable;
-  initCharts();$("scn").onchange();loadHist();poll();
+  initCharts();$("scn").onchange();loadHist();loadRoads();poll();
   const q=new URLSearchParams(location.search).get("replay");if(q){const r=await api("start",{replay:q});if(!r.ok)$("err").textContent=r.error}})();
 </script>
 </body>

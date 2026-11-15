@@ -10,6 +10,7 @@
 import json
 import logging
 import mimetypes
+from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -21,6 +22,7 @@ from app.simulation.lab_controller import SPEEDS, SimulationController
 from app.simulation.lab_engine import SimulationEngine, build_detector_engine
 from app.simulation.lab_history import HISTORY_DIR, HistoryStore, ReplayEngine
 from app.simulation.lab_report import build_report, runs_csv, scenarios_csv
+from app.simulation.lab_routing import RoadRouter, RoutingError
 from app.simulation.options import DRIVER_ACTIONS
 from app.motion import CrashConfig
 from app.motion.crash_response import DEFAULT_CONFIRM_TIMEOUT_S, DEFAULT_ON_TIMEOUT, TIMEOUT_POLICIES
@@ -39,6 +41,8 @@ class LabApp:
                  notifier_factory=None, roads_db: Path = ROADS_DB,
                  history_dir: Path | str = HISTORY_DIR):
         self.store = HistoryStore(history_dir)
+        self.router = RoadRouter(roads_db)
+        self._route_cache: OrderedDict = OrderedDict()
         self.controller = controller or SimulationController(self._make_engine)
         self.controller.subscribe_end(self._on_run_end)
         self.roads_db = roads_db
@@ -77,12 +81,43 @@ class LabApp:
         except Exception:
             logger.exception("Saving simulation history failed.")
 
-    def start(self, body: dict) -> None:
+    def plan_route(self, start, dest, road_type: str = "highway") -> dict:
+        """
+        مسیر روی جاده‌های دیتابیس آفلاین؛ اگر ممکن نبود، خط مستقیم با هشدار صریح.
+        نتیجه: {"route": Route, "method": "roads"|"straight", "warning": str|None, ...}
+        """
+        key = (round(start[0], 6), round(start[1], 6), round(dest[0], 6), round(dest[1], 6), road_type)
+        if key in self._route_cache:
+            self._route_cache.move_to_end(key)
+            return self._route_cache[key]
+        try:
+            planned = self.router.plan(start, dest)
+            route = Route("custom", "مسیر روی جاده‌های دیتابیس آفلاین",
+                          [tuple(p) for p in planned.points], planned.road_types)
+            result = {"route": route, "method": "roads", "warning": None}
+        except RoutingError as exc:
+            route = Route.from_points(start, dest, road_type)
+            result = {"route": route, "method": "straight",
+                      "warning": f"مسیر روی جاده پیدا نشد؛ خط مستقیم استفاده شد. ({exc})"}
+        result["length_m"] = round(route.length_m, 1)
+        self._route_cache[key] = result
+        while len(self._route_cache) > 8:
+            self._route_cache.popitem(last=False)
+        return result
+
+    def route_preview(self, start, dest, road_type: str) -> dict:
+        r = self.plan_route(start, dest, road_type)
+        route = r["route"]
+        return {"method": r["method"], "warning": r["warning"], "length_m": r["length_m"],
+                "points": [list(p) for p in route.points], "road_types": route.road_types}
+
+    def start(self, body: dict) -> dict | None:
         if body.get("replay"):
             self.store.load_run(str(body["replay"]))   # ValueError اگر نباشد
             self.controller.start("replay:" + str(body["replay"]))
-            return
+            return None
         params = {}
+        info = None
         if body.get("event_time_s") not in (None, ""):
             params["event_time_s"] = float(body["event_time_s"])
         if body.get("duration_s") not in (None, ""):
@@ -98,15 +133,19 @@ class LabApp:
             params["vehicle_id"] = str(body["vehicle_id"])
         if body.get("start") and body.get("destination"):
             s, d = body["start"], body["destination"]
-            params["route"] = Route.from_points(
+            planned = self.plan_route(
                 (float(s[0]), float(s[1])), (float(d[0]), float(d[1])),
-                body.get("road_type", "highway"),
+                str(body.get("road_type", "highway")),
             )
+            params["route"] = planned["route"]
+            info = {"route_method": planned["method"], "warning": planned["warning"],
+                    "route_length_m": planned["length_m"]}
         if body.get("road_source") == "project":
             if not self.roads_db.is_file():
                 raise ValueError("دیتابیس آفلاین جاده (data/roads_tehran.sqlite) پیدا نشد.")
             params["road_analyzer"] = RoadAnalyzer(offline=OfflineRoadProvider(self.roads_db))
         self.controller.start(str(body.get("scenario", "")), **params)
+        return info
 
     # ---- تلگرام
     def set_telegram(self, enabled: bool) -> dict:
@@ -164,6 +203,7 @@ class LabApp:
                 "driver_actions": list(DRIVER_ACTIONS),
             },
             "project_road_available": self.roads_db.is_file(),
+            "roads_available": self.router.available,
             "telegram_configurable": self._notifier_factory is not None,
         }
 
@@ -210,6 +250,26 @@ def make_handler(app: LabApp):
             try:
                 if url.path == "/api/config":
                     return self._json(app.config())
+                if url.path == "/api/route":
+                    q = parse_qs(url.query)
+                    try:
+                        s = [float(x) for x in q["start"][0].split(",")]
+                        d = [float(x) for x in q["dest"][0].split(",")]
+                        if len(s) != 2 or len(d) != 2:
+                            raise ValueError
+                        return self._json(app.route_preview(tuple(s), tuple(d), q.get("road_type", ["highway"])[0]))
+                    except (KeyError, ValueError, IndexError, TypeError):
+                        return self._json({"error": "پارامترهای start و dest باید به‌صورت lat,lon باشند."}, 400)
+                if url.path == "/api/roads":
+                    q = parse_qs(url.query)
+                    try:
+                        box = [float(q[k][0]) for k in ("south", "west", "north", "east")]
+                        zoom = int(q.get("zoom", ["14"])[0])
+                        return self._json(app.router.roads_in_bbox(*box, zoom))
+                    except (KeyError, ValueError, TypeError):
+                        return self._json({"error": "پارامترهای south, west, north, east, zoom لازم است."}, 400)
+                    except RoutingError as exc:
+                        return self._json({"error": str(exc), "features": []}, 404)
                 if url.path == "/api/history":
                     return self._json({"runs": app.store.list_runs()})
                 if url.path.startswith("/api/history/"):
